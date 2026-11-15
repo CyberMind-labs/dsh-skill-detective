@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)))
-const artifactRoot = process.env.DSH_TEST_ARTIFACTS || resolve(repo, '../test-artifacts/fix-2026-11-13')
+const artifactRoot = process.env.DSH_TEST_ARTIFACTS || resolve(repo, '../test-artifacts/fix-2026-11-15')
 await mkdir(artifactRoot, { recursive: true })
 const run = await mkdtemp(join(artifactRoot, 'scope-'))
 const fixtures = []
@@ -83,8 +83,39 @@ async function fixture(t) {
   }
   const scan = () => detective.scanAll({ reason: 'scope-regression' })
   const selector = skill => ({ instanceId: skill.instanceId, path: skill.path, name: skill.name, workspace: skill.workspace || A, sessionId: skill.sessionId || '' })
-  return { ...__test, dir, home, A, B, detective, service, put, scan, selector, services, active, registrations, requests, addSession, disposePlugin, disposeAgent, rejectRegistration: value => { rejectRegistration = value }, rejectDisposal: value => { rejectDisposal = value } }
+  const review = async (skill, workspace = A) => {
+    const result = await detective.reviewInstalled({ ...selector(skill), workspace, sessionId: 'session-1' }, workspace, { sessionId: 'session-1' })
+    assert.equal(result.ok, true, JSON.stringify(result))
+    return result
+  }
+  return { ...__test, dir, home, A, B, detective, service, put, scan, selector, review, services, active, registrations, requests, addSession, disposePlugin, disposeAgent, rejectRegistration: value => { rejectRegistration = value }, rejectDisposal: value => { rejectDisposal = value } }
 }
+
+test('session validation and temporary registration use the scoped Cordis get service', async t => {
+  const f = await fixture(t)
+  const scope = f.services.agents.get('session-1').ctx
+  const skills = scope.skills
+  scope.get = name => name === 'skills' ? skills : undefined
+  Object.defineProperty(scope, 'skills', { get() { throw new Error('undeclared property injection') } })
+  assert.equal(f.detective.validSessionId('session-1'), 'session-1')
+  const result = await f.detective.install({ name: 'word-docx', scope: 'temp', workspace: f.A, sessionId: 'session-1' })
+  assert.equal(result.ok, true, result.message)
+  assert.ok(f.active.get('session-1').has(result.name))
+})
+
+test('a completed model review is assessed against the completion time, not its start time', async t => {
+  const f = await fixture(t)
+  await f.put(join(f.home, 'skills'), 'delayed-review', 'A safe text fixture')
+  await f.scan()
+  const target = (await f.detective.listInstalled(f.A, { sessionId: 'session-1' })).find(skill => skill.name === 'delayed-review')
+  assert.equal(target.perm, 'unknown', 'a scanned file has no independently verified permission ceiling')
+  assert.equal(target.permLabel, '未记录')
+  const json = f.detective.judge.json
+  f.detective.judge.json = async request => { await new Promise(done => setTimeout(done, 15)); return json(request) }
+  const result = await f.detective.reviewInstalled(f.selector(target), f.A, { sessionId: 'session-1' })
+  assert.equal(result.ok, true, result.message)
+  assert.equal(result.audit.status, 'current')
+})
 
 test('a slow scan cannot overwrite an installation committed behind its snapshot', { timeout: 5_000 }, async t => {
   const f = await fixture(t)
@@ -166,7 +197,7 @@ test('old name-keyed index migrates to stable identities and corruption fails cl
   await writeFile(file, JSON.stringify({ version: 1, skills: { 'legacy-skill': { name: 'legacy-skill', path, file: join(path, 'SKILL.md'), scope: 'workspace', workspace: f.A, kind: 'local', at: Date.now(), summary: 'preserved summary', customField: 'preserved extension' } } }))
   const index = await f.detective.index.load()
   const record = Object.values(index.skills)[0]
-  assert.equal(index.version, 2)
+  assert.equal(index.version, 3)
   assert.equal(record.instanceId, f.skillInstanceId(record))
   assert.equal(index.skills[record.instanceId].summary, 'preserved summary')
   assert.equal(record.customField, 'preserved extension')
@@ -196,6 +227,7 @@ test('scan retains duplicate workspace instances and extra workspace settings ne
   await f.put(join(f.B, '.dsh', 'skills'), 'shared-skill', 'WORKSPACE_B_MOVE')
   await f.scan()
   const copyB = (await f.detective.listInstalled(f.B))[0]
+  await f.review(copyB, f.B)
   await f.detective.moveSkill({ ...f.selector(copyB), workspace: f.B }, 'global', [], f.B, '')
   assert.equal(existsSync(a), true); assert.equal(existsSync(b), false)
   assert.match(await readFile(join(f.home, 'skills', 'shared-skill', 'SKILL.md'), 'utf8'), /WORKSPACE_B_MOVE/)
@@ -207,6 +239,7 @@ test('global and project instances coexist; project wins recommendation and ambi
   const project = await f.put(join(f.A, '.dsh', 'skills'), 'shared-skill', 'PROJECT')
   await f.scan()
   const list = await f.detective.listInstalled(f.A)
+  for (const entry of list) await f.review(entry)
   assert.equal(list.length, 2)
   await assert.rejects(() => f.detective.toggle('shared-skill', false, f.A), { code: 'ambiguous-skill' })
   const analysis = await f.detective.analyze('Use shared-skill', f.A, 'session-1')
@@ -309,6 +342,7 @@ test('failed scope registration leaves the source directory and metadata intact'
   const source = await f.put(join(f.B, '.dsh', 'skills'), 'shared-skill', 'SOURCE_B')
   await f.scan()
   const entry = (await f.detective.listInstalled(f.B))[0]
+  await f.review(entry, f.B)
   f.rejectRegistration(true)
   await assert.rejects(() => f.detective.moveSkill({ ...f.selector(entry), workspace: f.B }, 'temp', [], f.B, 'session-1'), { code: 'temp-registration-failed' })
   assert.equal(existsSync(join(source, 'SKILL.md')), true)
@@ -402,6 +436,7 @@ test('multi-workspace move refuses collisions before changing any source or dest
   const collision = await f.put(join(f.B, '.dsh', 'skills'), 'shared-skill', 'B_KEEP')
   await f.scan()
   const entry = (await f.detective.listInstalled(f.A))[0]
+  await f.review(entry)
   await assert.rejects(() => f.detective.moveSkill(f.selector(entry), 'workspace', [f.A, f.B], f.A, ''), { code: 'name-conflict' })
   assert.equal(existsSync(original), true)
   assert.equal(existsSync(join(f.A, '.dsh', 'skills', 'shared-skill')), false)
@@ -542,4 +577,150 @@ test('resumed agents restore only their enabled persisted temporary skills', asy
   assert.equal(restarted.tempRegistrations.size, 1)
   await restarted.toggle({ ...enabled, workspace: f.A, sessionId: 'session-1' }, false, f.A)
   assert.equal(f.active.get('session-1').size, 0)
+})
+
+test('full-directory audit binds installed bytes and invalidates on a companion-only change', async t => {
+  const f = await fixture(t)
+  const source = await f.put(join(f.A, '.dsh', 'skills'), 'shared-skill', 'SOURCE_FOR_AUDIT')
+  await mkdir(join(source, 'scripts'))
+  const script = join(source, 'scripts', 'run.js')
+  await writeFile(script, 'export const reviewed = true\n')
+  await f.scan()
+  const selected = (await f.detective.listInstalled(f.A))[0]
+  assert.equal(selected.audit.status, 'unreviewed')
+  const approved = await f.review(selected)
+  assert.equal(approved.audit.scope, 'full-directory')
+  assert.equal(approved.audit.coverage.files, 2)
+  assert.ok(f.requests.at(-1).user.includes('scripts/run.js'))
+  assert.ok(f.requests.at(-1).user.includes('export const reviewed'))
+  const baseline = approved.audit.fingerprint
+  await writeFile(script, 'export const changed = true\n')
+  await f.scan()
+  const changed = (await f.detective.listInstalled(f.A))[0]
+  assert.equal(changed.audit.status, 'changed')
+  assert.equal(changed.audit.verdict, null)
+  assert.equal(changed.audit.fingerprint, baseline)
+  assert.notEqual(changed.audit.currentFingerprint, baseline)
+  assert.equal(changed.summary, '')
+  assert.deepEqual(changed.capabilities, [])
+  await assert.rejects(() => f.detective.toggle(f.selector(changed), true, f.A), { code: 'audit-revalidation-required' })
+  const analysis = await f.detective.analyze('Use shared-skill', f.A, 'session-1')
+  assert.equal(analysis.covered, null)
+})
+
+test('fresh list and detail cannot display cached approval after the main file changes', async t => {
+  const f = await fixture(t)
+  const installed = await f.detective.install({ name: 'word-docx', scope: 'workspace', workspace: f.A, sessionId: 'session-1' })
+  assert.equal(installed.ok, true)
+  const before = (await f.detective.listInstalled(f.A))[0]
+  assert.equal(before.audit.status, 'current')
+  await writeFile(join(installed.path, 'SKILL.md'), markdown('word-docx', 'EXTERNALLY_CHANGED'))
+  const fresh = (await f.detective.listInstalled(f.A, { freshAudit: true }))[0]
+  assert.equal(fresh.audit.status, 'changed')
+  assert.ok(fresh.audit.checkedAt)
+  const detail = await f.detective.detail(f.selector(fresh), f.A)
+  assert.equal(detail.skill.audit.status, 'changed')
+  assert.doesNotMatch(detail.skill.status, /审查有效|已审查/)
+})
+
+test('unknown companions are unverifiable and may be disabled but never enabled with a historical pass', async t => {
+  const f = await fixture(t)
+  const installed = await f.detective.install({ name: 'word-docx', scope: 'workspace', workspace: f.A, sessionId: 'session-1' })
+  await writeFile(join(installed.path, '.unknown-config'), 'UNSUPPORTED_FORMAT')
+  const selected = (await f.detective.listInstalled(f.A, { freshAudit: true }))[0]
+  assert.equal(selected.audit.status, 'unverifiable')
+  assert.equal(selected.audit.verdict, null)
+  await assert.rejects(() => f.detective.toggle(f.selector(selected), true, f.A), { code: 'audit-revalidation-required' })
+  const beforeCalls = f.requests.length
+  const reviewed = await f.detective.reviewInstalled(f.selector(selected), f.A, { sessionId: 'session-1' })
+  assert.equal(reviewed.ok, false)
+  assert.equal(reviewed.audit.status, 'unverifiable')
+  assert.equal(f.requests.length, beforeCalls)
+  const disabled = await f.detective.toggle(f.selector(selected), false, f.A)
+  assert.equal(disabled.ok, true)
+  assert.equal(disabled.audit.status, 'unverifiable')
+  assert.match(await readFile(join(installed.path, 'SKILL.md'), 'utf8'), /disable-model-invocation: true/)
+})
+
+test('controlled toggles preserve exact directory evidence without re-review or extending its expiry', async t => {
+  const f = await fixture(t)
+  const installed = await f.detective.install({ name: 'word-docx', scope: 'workspace', workspace: f.A, sessionId: 'session-1' })
+  const selector = { ...installed, workspace: f.A }
+  const baseline = (await f.detective.listInstalled(f.A))[0].audit
+  const beforeCalls = f.requests.length
+  const disabled = await f.detective.toggle(selector, false, f.A)
+  const enabled = await f.detective.toggle(selector, true, f.A)
+  assert.equal(disabled.audit.status, 'current')
+  assert.equal(enabled.audit.status, 'current')
+  assert.equal(enabled.audit.expiresAt, baseline.expiresAt)
+  assert.equal(enabled.audit.reviewedAt, baseline.reviewedAt)
+  assert.equal(f.requests.length, beforeCalls)
+  assert.notEqual(disabled.audit.fingerprint, baseline.fingerprint)
+})
+
+test('temporary restore and an existing registration both reject changed companion bytes', async t => {
+  const f = await fixture(t)
+  f.detective.resolveRemote = async () => ({ ok: true, repo: 'local/test', path: 'skills/temp-tool', files: [{ path: 'SKILL.md', text: markdown('temp-tool', 'TEMP') }, { path: 'scripts/run.js', text: 'export const old = true\n' }] })
+  const installed = await f.detective.installRemote('local/test/temp-tool', f.A, 'temp-tool', { scope: 'temp', sessionId: 'session-1' })
+  assert.equal(installed.ok, true)
+  assert.equal(f.active.get('session-1').size, 1)
+  await writeFile(join(installed.path, 'scripts', 'run.js'), 'export const newValue = true\n')
+  await f.scan()
+  assert.equal(f.active.get('session-1').size, 0)
+  await f.detective.restoreTempFor('session-1')
+  assert.equal(f.active.get('session-1').size, 0)
+  const selected = (await f.detective.listInstalled(f.A, { sessionId: 'session-1' }))[0]
+  assert.equal(selected.audit.status, 'changed')
+  const reviewed = await f.detective.reviewInstalled({ ...f.selector(selected), sessionId: 'session-1' }, f.A, { sessionId: 'session-1' })
+  assert.equal(reviewed.ok, true)
+  await f.detective.restoreTempFor('session-1')
+  assert.equal(f.active.get('session-1').size, 1)
+})
+
+test('changes made while a model review is running cannot be saved as current approval', async t => {
+  const f = await fixture(t)
+  const source = await f.put(join(f.A, '.dsh', 'skills'), 'shared-skill', 'BEFORE_REVIEW')
+  await f.scan()
+  const selected = (await f.detective.listInstalled(f.A))[0]
+  const judge = f.detective.judge.json.bind(f.detective.judge)
+  f.detective.judge.json = async request => {
+    const result = await judge(request)
+    await writeFile(join(source, 'SKILL.md'), markdown('shared-skill', 'CHANGED_DURING_MODEL'))
+    return result
+  }
+  const reviewed = await f.detective.reviewInstalled(f.selector(selected), f.A, { sessionId: 'session-1' })
+  assert.equal(reviewed.ok, false)
+  assert.equal(reviewed.code, 'audit-content-changed')
+  assert.equal(reviewed.audit.status, 'changed')
+  assert.equal(reviewed.audit.verdict, null)
+})
+
+test('a failed explicit re-review revokes the previous current claim', async t => {
+  const f = await fixture(t)
+  const installed = await f.detective.install({ name: 'word-docx', scope: 'workspace', workspace: f.A, sessionId: 'session-1' })
+  const selected = (await f.detective.listInstalled(f.A))[0]
+  f.detective.reviewFiles = async () => ({ ok: false, error: 'TEST_MODEL_UNAVAILABLE' })
+  const reviewed = await f.detective.reviewInstalled({ ...installed, workspace: f.A }, f.A, { sessionId: 'session-1' })
+  assert.equal(reviewed.ok, false)
+  assert.equal(reviewed.code, 'audit-unavailable')
+  assert.notEqual(reviewed.audit.status, 'current')
+  assert.equal((await f.detective.listInstalled(f.A))[0].audit.verdict, null)
+  await assert.rejects(() => f.detective.toggle(f.selector(selected), true, f.A), { code: 'audit-revalidation-required' })
+})
+
+test('expiry is derived before a disk scan and renamed installs bind their final actual bytes', async t => {
+  const f = await fixture(t)
+  const first = await f.detective.install({ name: 'word-docx', scope: 'workspace', workspace: f.A, sessionId: 'session-1' })
+  const renamed = await f.detective.install({ name: 'word-docx', scope: 'workspace', workspace: f.A, sessionId: 'session-1', conflict: 'rename' })
+  assert.equal(renamed.ok, true)
+  assert.equal(renamed.name, 'word-docx-2')
+  const current = (await f.detective.listInstalled(f.A)).find(item => item.instanceId === renamed.instanceId)
+  const snapshot = await f.readSkillSnapshot(renamed.path)
+  assert.equal(current.audit.fingerprint, snapshot.contentHash)
+  assert.match(await readFile(join(renamed.path, 'SKILL.md'), 'utf8'), /^name: word-docx-2$/m)
+  await f.detective.state.update(state => { state.installs[first.instanceId].auditEvidence.expiresAt = Date.now() - 1 })
+  const expired = (await f.detective.listInstalled(f.A)).find(item => item.instanceId === first.instanceId)
+  assert.equal(expired.audit.status, 'expired')
+  assert.equal(expired.audit.verdict, null)
+  assert.deepEqual(expired.capabilities, [])
 })

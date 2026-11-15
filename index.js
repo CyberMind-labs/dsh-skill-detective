@@ -26,6 +26,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { EXTRA_CATALOG } from './catalog.js'
+import { createProtectionService } from './protection-service.js'
+import { readSkillSnapshot, readSkillSnapshotSync, assessAuditEvidence, createAuditEvidence, carryControlledAudit, transformSkillFrontmatter, AUDIT_EVIDENCE_TTL } from './audit-evidence.js'
 
 /* ------------------------------------------------------------------ */
 /* Remote skill sources                                                */
@@ -45,7 +47,7 @@ const RAW_MIRRORS = [
 const MAX_SKILL_FILES = 40
 const MAX_SKILL_FILE_BYTES = 256 * 1024
 const MAX_SKILL_TOTAL_BYTES = 512 * 1024
-const AUDIT_POLICY_VERSION = 'security-audit-v2-strict'
+const AUDIT_POLICY_VERSION = 'security-audit-v3-full-directory'
 const AUDIT_CACHE_TTL = 180 * 86_400_000
 const REMOTE_TREE_TTL = 5 * 60_000
 const SKILL_TEXT_FILE = /\.(?:md|markdown|mdown|txt|rst|csv|tsv|json|jsonc|ya?ml|toml|ini|cfg|conf|env|sh|bash|zsh|fish|ps1|bat|cmd|py|rb|pl|lua|r|js|cjs|mjs|jsx|ts|tsx|go|rs|java|kt|kts|c|h|cc|cpp|hpp|cs|php|swift|sql|html?|css|scss|less|xml|svg|vue|svelte|gradle)$/i
@@ -512,7 +514,8 @@ function humanCount(value) {
 function permLabel(perm) {
   if (perm === 'command') return { text: '网络访问 · 命令执行', warn: true }
   if (perm === 'network') return { text: '网络访问 · 文件写入', warn: true }
-  return { text: '文件读写', warn: false }
+  if (perm === 'files') return { text: '文件读写', warn: false }
+  return { text: '未记录', warn: false }
 }
 
 function stamp(value) {
@@ -680,14 +683,22 @@ function skillError(code, message) {
   return Object.assign(new Error(message), { code })
 }
 
-function hashFiles(files, prompt = '') {
+// Cordis agent contexts may reject undeclared property injections while get()
+// still supplies the correctly scoped service proxy. Never infer a dead session
+// from a property-access exception alone.
+function scopedSkills(ctx) {
+  try { const service = ctx?.get?.('skills'); if (service) return service } catch { /* try the legacy test/host surface */ }
+  try { return ctx?.skills } catch { return null }
+}
+
+function hashFiles(files, prompt = '', contentHash = '') {
   const hash = createHash('sha256')
-  hash.update(JSON.stringify([AUDIT_POLICY_VERSION, prompt]))
+  hash.update(JSON.stringify([AUDIT_POLICY_VERSION, prompt, contentHash]))
   hash.update('\u0000')
   for (const file of [...files].sort((a, b) => String(a.path).localeCompare(String(b.path)))) {
     hash.update(String(file.path ?? ''))
     hash.update('\u0000')
-    hash.update(file.mode ?? '100644')
+    hash.update(JSON.stringify([file.mode ?? '100644', file.permissions ?? null]))
     hash.update('\u0000')
     hash.update(String(file.text ?? ''))
     hash.update('\u0000')
@@ -1052,7 +1063,7 @@ function buildAuditInput(files, meta = {}) {
   for (const file of files) {
     const path = String(file.path ?? 'file')
     const text = String(file.text ?? '')
-    lines.push(`--- ${path} (${text.length} 字符, mode=${file.mode ?? '100644'}) ---`, text, '')
+    lines.push(`--- ${path} (${text.length} 字符, mode=${file.mode ?? '100644'}, permissions=${file.permissions ?? 'unknown'}) ---`, text, '')
   }
   return lines.join('\n')
 }
@@ -1203,7 +1214,7 @@ class SkillIndex extends JsonStore {
     }
     const scanRaw = raw.scan && typeof raw.scan === 'object' ? raw.scan : {}
     this.data = {
-      version: 2,
+      version: 3,
       at: Number.isFinite(raw.at) && raw.at > 0 ? raw.at : 0,
       skills,
       scan: {
@@ -1608,25 +1619,31 @@ function pickSections(sections, keywords) {
 }
 
 /**
- * Score one marketplace entry for the learning comparison: what it does well
- * and what it lacks. The signals are structural (code samples, acceptance,
- * caveats and step count), not a task match or capability judgement.
+ * Inspect the actual document snapshot used by the merge. These checks report
+ * visible structure only; they neither rank skills nor validate their effects.
  */
-function evaluateSkill(entry) {
-  const text = buildSkillMarkdown(entry)
+function evaluateSkill(entry, content, contentSource) {
+  const basis = contentSource || (typeof content === 'string' ? 'provided-content' : 'catalog-template')
+  const text = typeof content === 'string' ? content : buildSkillMarkdown(entry)
   const sections = sectionsOf(text)
-  const pros = []
-  const cons = []
-  if (/^\s{0,3}(?:`{3,}|~{3,})/m.test(text)) pros.push('含代码示例')
-  else cons.push('缺少代码示例')
-  if (sections.some(section => /验收|检查/.test(section.title))) pros.push('带验收清单')
-  else cons.push('没有验收标准')
-  if (sections.some(section => /注意|坑|限制/.test(section.title))) pros.push('写明风险与限制')
-  const steps = (text.match(/^\d+\.\s/gm) ?? []).length
-  if (steps >= 3 && steps <= 12) pros.push(`步骤清晰（${steps} 步）`)
-  else if (steps > 12) cons.push('步骤偏多')
-  const score = Math.max(0, Math.min(100, 50 + pros.length * 10 - cons.length * 10))
-  return { score, pros, cons }
+  let fence = null
+  let codeBlocks = 0
+  let steps = 0
+  for (const line of text.split(/\r?\n/)) {
+    const marker = line.match(/^\s{0,3}(`{3,}|~{3,})/)
+    if (marker) {
+      if (fence === null) { fence = { char: marker[1][0], length: marker[1].length }; codeBlocks += 1 }
+      else if (marker[1][0] === fence.char && marker[1].length >= fence.length && /^\s{0,3}(?:`+|~+)\s*$/.test(line)) fence = null
+    } else if (fence === null && /^\s*\d+[.)]\s+/.test(line)) steps += 1
+  }
+  const checks = [
+    { id: 'code-example', status: codeBlocks === 0 ? 'missing' : fence ? 'incomplete' : 'present', count: codeBlocks },
+    { id: 'acceptance', status: sections.some(section => /验收|检查|acceptance|verification|validation|checklist/i.test(section.title)) ? 'present' : 'missing' },
+    { id: 'cautions', status: sections.some(section => /注意|坑|限制|风险|caveats?|limitations?|warnings?/i.test(section.title)) ? 'present' : 'missing' },
+    { id: 'numbered-steps', status: steps > 0 ? 'present' : 'missing', count: steps },
+  ]
+  if (basis === 'unavailable') for (const check of checks) { check.status = 'unavailable'; delete check.count }
+  return { checks, basis, effectValidation: 'unverified' }
 }
 
 /**
@@ -2092,9 +2109,10 @@ async function scanRoot(entry) {
       if (error.code === 'unsafe-symlink') continue
       throw error
     }
-    const read = await readSkillFile(file)
-    if (read === null) continue
-    const { meta, text } = read
+    const snapshot = await readSkillSnapshot(dir)
+    const read = snapshot.ok ? { text: snapshot.files.find(item => item.path === 'SKILL.md').text } : await readSkillFile(file)
+    const text = read?.text || ''
+    const meta = parseFrontmatter(text)
     const metaName = typeof meta.name === 'string' ? meta.name.trim() : ''
     const diskName = basename(dir)
     // A skill written by hand may have a Chinese or otherwise non-ASCII folder
@@ -2121,7 +2139,9 @@ async function scanRoot(entry) {
       provider: '',
       sourceKind: '',
       fingerprint: hashText(text),
-      bytes: await directorySize(dir),
+      contentHash: snapshot.ok ? snapshot.contentHash : null,
+      snapshot,
+      bytes: snapshot.ok ? snapshot.coverage.bytes : 0,
     })
   }
   return out
@@ -2272,6 +2292,72 @@ class SkillDetective {
    * This never walks a skill root; `scanAll` owns that and runs on install,
    * `skills/change`, panel refresh and a manual scan.
    */
+  async auditPolicy() {
+    try {
+      const prompt = await readFile(join(PROMPT_DIR, 'security-audit.md'), 'utf8')
+      if (!stripFrontmatter(prompt).trim()) throw new Error('审查提示词为空')
+      return { policyVersion: AUDIT_POLICY_VERSION, promptHash: hashText(prompt), maxAgeMs: AUDIT_EVIDENCE_TTL, now: Date.now() }
+    } catch (error) {
+      return { policyVersion: AUDIT_POLICY_VERSION, promptHash: '', maxAgeMs: AUDIT_EVIDENCE_TTL, now: Date.now(), error: error.message }
+    }
+  }
+
+  auditEvidenceFor(record, state = this.state.data) {
+    const meta = state?.installs?.[record.instanceId]
+    return meta && Object.hasOwn(meta, 'auditEvidence') ? meta.auditEvidence : record.auditEvidence || null
+  }
+
+  auditForSnapshot(record, snapshot, policy, evidence = this.auditEvidenceFor(record)) {
+    const audit = assessAuditEvidence(evidence, snapshot, policy)
+    return { ...audit, checkedAt: Date.now() }
+  }
+
+  async persistAuditSnapshot(record, snapshot, policy, options = {}) {
+    const evidence = Object.hasOwn(options, 'evidence') ? options.evidence : this.auditEvidenceFor(record)
+    const audit = this.auditForSnapshot(record, snapshot, policy, evidence)
+    const { snapshot: omitted, ...base } = record
+    const updated = { ...base, bytes: snapshot.ok ? snapshot.coverage.bytes : base.bytes || 0, contentHash: snapshot.ok ? snapshot.contentHash : null, snapshotCheckedAt: audit.checkedAt, snapshotError: snapshot.ok ? null : { code: snapshot.code, path: snapshot.path, message: snapshot.message }, auditEvidence: evidence, audit,
+      ...(audit.status !== 'current' ? { summary: '', capabilities: [], triggers: [], summarizedAt: 0 } : {}),
+    }
+    if (Object.hasOwn(options, 'evidence')) await this.state.update(data => {
+      const old = data.installs[record.instanceId] || {}
+      data.installs[record.instanceId] = { ...old, name: record.name, instanceId: record.instanceId, path: record.path, scope: record.scope, workspace: record.workspace, sessionId: record.sessionId, installedAt: old.installedAt || Date.now(), auditEvidence: evidence }
+    })
+    await this.index.update(index => { index.skills[record.instanceId] = updated })
+    if (options.releaseTemp !== false && audit.status !== 'current' && record.scope === 'temp') await this.cleanupCommitted(() => this.releaseTemp(record.instanceId), '失效临时注册释放')
+    return { record: updated, snapshot, audit, evidence, policy }
+  }
+
+  async verifyInstalledAudit(record, options = {}) {
+    const snapshot = await readSkillSnapshot(record.path)
+    const policy = options.policy || await this.auditPolicy()
+    const result = await this.persistAuditSnapshot(record, snapshot, policy)
+    if (result.audit.status !== 'current') throw Object.assign(skillError('audit-revalidation-required', result.audit.reason || '技能需要完整目录重新审查'), { audit: result.audit })
+    return result
+  }
+
+  async reviewInstalled(selector, workspace, options = {}) {
+    return this.mutateSkills(async () => {
+      const sessionId = options.sessionId || (typeof selector === 'object' ? selector.sessionId : '') || ''
+      if (!this.validSessionId(sessionId)) return { ok: false, code: 'session-unavailable', message: '请选择一个有效会话用于安全审查' }
+      const record = await this.selectInstalled(selector, workspace, { sessionId })
+      if (!record.path) return { ok: false, code: 'audit-unverifiable', message: '内联技能没有可验证的完整目录' }
+      const before = await readSkillSnapshot(record.path)
+      const policy = await this.auditPolicy()
+      if (!before.ok) {
+        const result = await this.persistAuditSnapshot(record, before, policy, { evidence: null })
+        return { ok: false, code: 'audit-unverifiable', message: result.audit.reason, audit: result.audit }
+      }
+      const review = await this.reviewFiles(before.files, { name: record.name, source: record.source || 'local/review', sessionId, contentHash: before.contentHash })
+      const after = await readSkillSnapshot(record.path), currentPolicy = await this.auditPolicy()
+      const evidence = createAuditEvidence(before, review, { ...policy, policyVersion: review.policyVersion, promptHash: review.promptHash, reviewedAt: review.at || Date.now(), expiresAt: (review.at || Date.now()) + AUDIT_EVIDENCE_TTL })
+      const reviewedRecord = review.ok ? { ...record, summary: review.summary, capabilities: review.capabilities || [], triggers: review.triggers || [], summarizedAt: review.at || Date.now() } : record
+      const result = await this.persistAuditSnapshot(reviewedRecord, after, currentPolicy, { evidence })
+      if (!review.ok || result.audit.status !== 'current') return { ok: false, code: !review.ok ? 'audit-unavailable' : result.audit.status === 'changed' ? 'audit-content-changed' : result.audit.status === 'unverifiable' ? 'audit-unverifiable' : 'audit-rejected', message: result.audit.reason || review.error || '完整目录审查未通过', audit: result.audit }
+      return { ok: true, name: record.name, instanceId: record.instanceId, audit: result.audit }
+    })
+  }
+
   async listInstalled(workspace, options = {}) {
     await this.ensureIndexSeeded()
     let index = await this.index.load()
@@ -2282,7 +2368,16 @@ class SkillDetective {
     const state = await this.state.load()
     const ws = identityPath(workspace || this.defaultWorkspace())
     const sessionId = this.validSessionId(options.sessionId)
-    const records = Object.values(index.skills).map(instanceRecord)
+    let records = Object.values(index.skills).map(instanceRecord)
+    const policy = await this.auditPolicy()
+    if (options.freshAudit) {
+      records = await Promise.all(records.map(async record => {
+        if (record.scope === 'workspace' && identityPath(record.workspace) !== ws) return record
+        if (record.scope === 'temp' && (!sessionId || sessionDirectoryId(record.sessionId) !== sessionDirectoryId(sessionId))) return record
+        const snapshot = record.path ? await readSkillSnapshot(record.path) : { ok: false, message: '内联技能没有可验证的完整目录' }
+        return (await this.persistAuditSnapshot(record, snapshot, policy)).record
+      }))
+    }
     return records.filter(skill => {
       if (skill.scope === 'workspace') return identityPath(skill.workspace) === ws
       if (skill.scope === 'temp') return sessionId !== '' && sessionDirectoryId(skill.sessionId) === sessionDirectoryId(sessionId)
@@ -2293,18 +2388,21 @@ class SkillDetective {
         const meta = state.installs[skill.instanceId] ?? legacy ?? null
         const bundled = skill.kind === 'bundled' || skill.kind === 'inline'
         const origin = bundled ? 'scan' : ['market', 'plugin', 'learned'].includes(meta?.origin) ? meta.origin : 'user'
-        const perm = meta?.perm ?? 'files'
-        const summary = typeof skill.summary === 'string' ? skill.summary : ''
+        const perm = meta?.perm ?? 'unknown'
+        const cachedSnapshot = skill.contentHash ? { ok: true, contentHash: skill.contentHash } : { ok: false, message: skill.snapshotError?.message || '尚未完成完整目录核验' }
+        const audit = { ...assessAuditEvidence(this.auditEvidenceFor(skill, state), cachedSnapshot, policy), checkedAt: skill.snapshotCheckedAt || null }
+        const summary = audit.status === 'current' && typeof skill.summary === 'string' ? skill.summary : ''
         return {
           ...skill,
+          audit,
           displayName: meta?.displayName || skill.displayName || '',
           version: meta?.version ?? '0.1.0', origin,
           scope: skill.scope, managed: skill.managed !== false,
           workspaces: skill.scope === 'workspace' ? [skill.workspace] : [],
           installs: meta?.installs ?? null, author: meta?.author ?? '', category: meta?.category ?? '', source: meta?.source ?? '',
-          description: meta?.description || summary || skill.description || '', summary,
+          description: summary || (audit.status === 'current' ? meta?.description : '') || skill.description || '', summary,
           whenToUse: skill.whenToUse || '',
-          capabilities: Array.isArray(skill.capabilities) ? skill.capabilities : [], triggers: Array.isArray(skill.triggers) ? skill.triggers : [],
+          capabilities: audit.status === 'current' && Array.isArray(skill.capabilities) ? skill.capabilities : [], triggers: audit.status === 'current' && Array.isArray(skill.triggers) ? skill.triggers : [],
           perm, permLabel: permLabel(perm).text, permWarn: permLabel(perm).warn,
           enabled: !skill.disabled, installedAt: meta?.installedAt ?? null, timeLabel: relativeTime(meta?.installedAt),
           bytes: skill.bytes ?? 0, sizeLabel: humanBytes(skill.bytes ?? 0), installsLabel: humanCount(meta?.installs),
@@ -2322,7 +2420,7 @@ class SkillDetective {
     if (typeof sessionId !== 'string' || sessionId === '') return ''
     try {
       const agent = this.ctx.get('agents')?.get?.(sessionId)
-      return typeof agent?.ctx?.effect === 'function' && typeof agent?.ctx?.skills?.register === 'function' ? sessionId : ''
+      return typeof agent?.ctx?.effect === 'function' && typeof scopedSkills(agent?.ctx)?.register === 'function' ? sessionId : ''
     } catch { return '' }
   }
 
@@ -2331,7 +2429,7 @@ class SkillDetective {
     const ws = this.normalizeWorkspace(workspace || selection.workspace || '')
     if (selection.workspace && identityPath(this.normalizeWorkspace(selection.workspace)) !== identityPath(ws)) throw skillError('skill-not-found', '选中的技能实例不属于指定工作区')
     const sessionId = selection.sessionId ?? options.sessionId ?? ''
-    const installed = await this.listInstalled(ws, { sessionId })
+    const installed = await this.listInstalled(ws, { sessionId, freshAudit: options.freshAudit === true })
     let matches = installed.filter(skill => selection.instanceId ? skill.instanceId === selection.instanceId
       : selection.path ? identityPath(skill.path) === identityPath(selection.path)
       : skill.name === selection.name)
@@ -2493,39 +2591,38 @@ class SkillDetective {
   async scanAllLocked(options = {}) {
     const reason = typeof options.reason === 'string' && options.reason !== '' ? options.reason : 'manual'
     await this.ensureIndexSeeded()
-    const index = await this.index.load()
-    const roots = this.scanRoots()
-    const found = []
+    const index = await this.index.load(), state = await this.state.load(), policy = await this.auditPolicy()
+    const roots = this.scanRoots(), found = []
     for (const def of roots) found.push(...await scanRoot(def))
     const registry = await this.registryEntries()
     if (registry !== null) found.push(...registry)
     const previous = Object.fromEntries(Object.values(index.skills).map(value => { const record = instanceRecord(value); return [record.instanceId, record] }))
+    if (registry === null) for (const record of Object.values(previous)) if (['inline', 'bundled'].includes(record.kind)) found.push(record)
     const next = {}, now = Date.now()
     let added = 0
     for (const raw of found) {
       const skill = instanceRecord(raw)
       if (next[skill.instanceId]) continue
       const prior = previous[skill.instanceId]
-      const fingerprint = skill.fingerprint ?? ''
-      const unchanged = prior && fingerprint !== '' && prior.fingerprint === fingerprint
+      const snapshot = raw.snapshot || (skill.path ? await readSkillSnapshot(skill.path) : { ok: false, message: '内联技能没有可验证的完整目录' })
+      const evidence = this.auditEvidenceFor({ ...prior, ...skill }, state)
+      const audit = this.auditForSnapshot(skill, snapshot, policy, evidence)
+      const unchanged = snapshot.ok && prior?.contentHash === snapshot.contentHash
       if (!prior) added++
+      const { snapshot: omitted, ...clean } = skill
       next[skill.instanceId] = {
-        ...prior, ...skill, file: skill.file || '',
+        ...prior, ...clean, file: skill.file || '',
         sessionId: skill.scope === 'temp' ? prior?.sessionId || skill.sessionId : undefined,
-        managed: skill.managed !== false,
-        kind: ['inline', 'bundled'].includes(skill.kind) ? skill.kind : 'local',
-        summary: unchanged ? prior.summary || '' : '',
-        capabilities: unchanged ? prior.capabilities || [] : [], triggers: unchanged ? prior.triggers || [] : [],
-        disabled: skill.disabled === true, fingerprint, bytes: skill.bytes ?? prior?.bytes ?? 0,
-        at: now, firstSeenAt: prior?.firstSeenAt ?? now, summarizedAt: unchanged ? prior.summarizedAt || 0 : 0,
+        managed: skill.managed !== false, kind: ['inline', 'bundled'].includes(skill.kind) ? skill.kind : 'local',
+        contentHash: snapshot.ok ? snapshot.contentHash : null, snapshotError: snapshot.ok ? null : { code: snapshot.code, path: snapshot.path, message: snapshot.message }, snapshotCheckedAt: now, auditEvidence: evidence, audit,
+        summary: unchanged && audit.status === 'current' ? prior.summary || '' : '', capabilities: unchanged && audit.status === 'current' ? prior.capabilities || [] : [], triggers: unchanged && audit.status === 'current' ? prior.triggers || [] : [],
+        disabled: skill.disabled === true, bytes: snapshot.ok ? snapshot.coverage.bytes : 0,
+        at: now, firstSeenAt: prior?.firstSeenAt ?? now, summarizedAt: unchanged && audit.status === 'current' ? prior.summarizedAt || 0 : 0,
       }
     }
-    if (registry === null) for (const [id, record] of Object.entries(previous)) {
-      if (!next[id] && ['inline', 'bundled'].includes(record.kind)) next[id] = record
-    }
     const summary = { at: now, reason, total: Object.keys(next).length, roots: roots.map(def => def.root), registry: registry !== null }
-    await this.index.update(data => { data.version = 2; data.skills = next; data.at = now; data.scan = summary })
-    this.log(`skill-detective: scan (${reason}) found ${summary.total} instances, ${added} new`)
+    await this.index.update(data => { data.version = 3; data.skills = next; data.at = now; data.scan = summary })
+    for (const id of this.tempRegistrations.keys()) if (next[id]?.audit?.status !== 'current') await this.cleanupCommitted(() => this.releaseTemp(id), '失效临时注册释放')
     return { ok: true, added, workspaces: roots.filter(item => item.scope === 'workspace').length, ...summary, timeLabel: relativeTime(now) }
   }
 
@@ -2584,13 +2681,13 @@ class SkillDetective {
         return { ok: false, error: '待审查内容超过字节上限或包含二进制内容' }
       }
     }
-    const hash = hashFiles(list, prompt)
+    const hash = hashFiles(list, prompt, meta.contentHash || '')
     // Reviews must use the explicitly selected session, including cache hits.
     // A recent message in another conversation must never select the payer/model.
     const sessionId = this.validSessionId(meta.sessionId)
     if (!sessionId) return { ok: false, hash, error: 'session-unavailable' }
     const cached = await this.auditCache.get(hash)
-    if (cached !== null) return { ok: true, ...cached, hash, cached: true }
+    if (cached !== null) return { ok: true, ...cached, hash, contentHash: meta.contentHash || null, policyVersion: AUDIT_POLICY_VERSION, promptHash: hashText(prompt), cached: true }
     const chunks = planAuditChunks(list)
     if (chunks.length === 0) return { ok: false, hash, error: '没有可审查的内容' }
     if (chunks.length > AUDIT_MAX_CHUNKS) {
@@ -2637,6 +2734,8 @@ class SkillDetective {
       ...verdict,
       at: Date.now(),
       model,
+      contentHash: meta.contentHash || null,
+      promptHash: hashText(prompt),
       policyVersion: AUDIT_POLICY_VERSION,
       coverage: {
         files: list.length,
@@ -2646,7 +2745,7 @@ class SkillDetective {
       },
     }
     await this.auditCache.put(hash, record)
-    return { ok: true, ...record, hash, cached: false }
+    return { ok: true, ...record, hash, contentHash: meta.contentHash || null, policyVersion: AUDIT_POLICY_VERSION, promptHash: hashText(prompt), cached: false }
   }
 
   /**
@@ -2677,7 +2776,7 @@ class SkillDetective {
     // skips this message instead of blocking the user's turn on a disk walk;
     // the startup scan fills it in right after the plugin loads.
     const installed = await this.listInstalled(workspace, { scan: false, sessionId })
-    const enabled = this.effectiveInstalled(installed).filter(item => item.enabled)
+    const enabled = this.effectiveInstalled(installed).filter(item => item.enabled && item.audit?.status === 'current')
     if (Number(this.index.data?.scan?.at ?? 0) === 0) {
       this.log('skill-detective: index not ready, skipping need analysis')
       return { ...empty, installedCount: installed.length, error: 'index-empty' }
@@ -2861,30 +2960,32 @@ class SkillDetective {
     let sourceText = ''
     try {
       sourceText = await readFile(join(source.path, 'SKILL.md'), 'utf8')
-    } catch {
-      sourceText = entry ? buildSkillMarkdown(entry) : ''
+    } catch (error) {
+      preserveSources.push({ name: source.name, instanceId: source.instanceId, path: source.path, files: [], reason: `无法读取已安装的 SKILL.md：${error.message}` })
     }
     const installedByName = new Map(installed.map(item => [item.name, item]))
     const peersWithText = []
     for (const peer of peers) {
       const present = installedByName.get(peer.name)
       let text = ''
+      let contentSource = present === undefined ? 'catalog-template' : 'installed-file'
       if (present !== undefined) {
         await inspectCompanions(present)
         try {
           text = await readFile(join(present.path, 'SKILL.md'), 'utf8')
-        } catch {
-          text = buildSkillMarkdown(peer)
+        } catch (error) {
+          contentSource = 'unavailable'
+          preserveSources.push({ name: present.name, instanceId: present.instanceId, path: present.path, files: [], reason: `无法读取已安装的 SKILL.md：${error.message}` })
         }
       } else {
         text = buildSkillMarkdown(peer)
       }
-      peersWithText.push({ entry: peer, text })
+      peersWithText.push({ entry: peer, text, contentSource })
     }
 
     const merged = buildMergedSkill(source, sourceText, entry, peersWithText)
     const peerSummary = peersWithText.map(peer => {
-      const quality = evaluateSkill(peer.entry)
+      const document = evaluateSkill(peer.entry, peer.text, peer.contentSource)
       return {
         name: peer.entry.name,
         version: peer.entry.version,
@@ -2896,9 +2997,9 @@ class SkillDetective {
         permLabel: permLabel(peer.entry.perm).text,
         permWarn: permLabel(peer.entry.perm).warn,
         installed: installedByName.has(peer.entry.name),
-        score: quality.score,
-        pros: quality.pros,
-        cons: quality.cons,
+        documentChecks: document.checks,
+        contentSource: document.basis,
+        effectValidation: document.effectValidation,
       }
     })
 
@@ -3069,8 +3170,8 @@ class SkillDetective {
         installsLabel: `${humanCount(Number.isFinite(installs) ? installs : 0)} 安装`,
         description: typeof row.description === 'string' ? row.description : '',
         whenToUse: '',
-        perm: 'files',
-        permLabel: permLabel('files').text,
+        perm: 'unknown',
+        permLabel: permLabel('unknown').text,
         permWarn: false,
         source: `skills.sh/${skillName}`,
         installed: false,
@@ -3341,6 +3442,7 @@ class SkillDetective {
         await assertNoSymlinkPath(target)
       }
       await this.writeFiles(stage, files)
+      await options.validateStage?.(stage)
       if (existsSync(dir)) {
         if (!options.overwrite) throw skillError('name-conflict', '目标目录已存在，请先确认覆盖或改名')
         await rename(dir, backup)
@@ -3399,16 +3501,33 @@ class SkillDetective {
       const state = await this.state.load(), index = await this.index.load()
       const oldState = structuredClone(state.installs), oldIndex = structuredClone(index.skills)
       const oldRegistration = this.tempRegistrations.get(record.instanceId)
-      let registered = false
+      let registered = false, auditEvidence, auditedSnapshot
       try {
-        await this.atomicPublish(dir, finalFiles, { overwrite: conflict === 'overwrite', warnings, finalize: async () => {
-          record.bytes = await directorySize(dir)
+        await this.atomicPublish(dir, finalFiles, { overwrite: conflict === 'overwrite', warnings, validateStage: async stage => {
+          const snapshot = await readSkillSnapshot(stage)
+          if (!snapshot.ok) throw skillError('audit-unverifiable', snapshot.message)
+          const fullReview = await this.reviewFiles(snapshot.files, { name, source: meta.source || sourceKind, sessionId, contentHash: snapshot.contentHash })
+          const policy = await this.auditPolicy()
+          const checked = await readSkillSnapshot(stage)
+          auditEvidence = createAuditEvidence(snapshot, fullReview, { ...policy, policyVersion: fullReview.policyVersion, promptHash: fullReview.promptHash, reviewedAt: fullReview.at || Date.now(), expiresAt: (fullReview.at || Date.now()) + AUDIT_EVIDENCE_TTL })
+          const audit = this.auditForSnapshot(record, checked, policy, auditEvidence)
+          if (audit.status !== 'current') throw skillError(audit.status === 'changed' ? 'audit-content-changed' : 'audit-rejected', audit.reason || fullReview.error || '完整目录审查未通过')
+          verdict = fullReview
+          auditedSnapshot = checked
+          Object.assign(record, { auditEvidence, audit, contentHash: checked.contentHash, snapshotCheckedAt: audit.checkedAt, snapshotError: null, summary: fullReview.summary, capabilities: fullReview.capabilities || [], triggers: fullReview.triggers || [] })
+        }, finalize: async () => {
+          const actual = await readSkillSnapshot(dir), policy = await this.auditPolicy()
+          const audit = this.auditForSnapshot(record, actual, policy, auditEvidence)
+          if (audit.status !== 'current' || actual.contentHash !== auditedSnapshot.contentHash) throw skillError('audit-content-changed', '落盘目录与完整审查快照不一致')
+          record.bytes = actual.coverage.bytes
+          record.audit = audit
+          record.snapshotCheckedAt = audit.checkedAt
           if (scope === 'temp') {
-            registered = await this.registerTempFor(sessionId, { name, description: record.description, content: bodyOf(markdown), whenToUse: record.whenToUse, instanceId: record.instanceId })
+            registered = await this.registerTempFor(sessionId, { name, description: record.description, content: bodyOf(markdown), whenToUse: record.whenToUse, instanceId: record.instanceId }, { auditEvidence })
             if (!registered) throw skillError('temp-registration-failed', '临时技能未能注册到当前会话')
           }
-          await this.state.update(data => { data.installs[record.instanceId] = { ...meta, name, instanceId: record.instanceId, path: dir, workspace: record.workspace, sessionId: record.sessionId, displayName, scope, installedAt: record.at, auditVerdict: verdict.verdict, auditSeverity: verdict.severity } })
-          await this.index.update(data => { data.version = 2; data.skills[record.instanceId] = record })
+          await this.state.update(data => { data.installs[record.instanceId] = { ...meta, name, instanceId: record.instanceId, path: dir, workspace: record.workspace, sessionId: record.sessionId, displayName, scope, installedAt: record.at, auditVerdict: verdict.verdict, auditSeverity: verdict.severity, auditEvidence } })
+          await this.index.update(data => { data.version = 3; data.skills[record.instanceId] = record })
         } })
       } catch (error) {
         if (registered) await this.cleanupCommitted(() => this.releaseTemp(record.instanceId), '失败安装的注册释放', warnings)
@@ -3436,7 +3555,7 @@ class SkillDetective {
     const fallback = String(id).split('/')[2] || 'remote-skill'
     const chosen = chooseSkillName(typeof requestedName === 'string' && requestedName.trim() ? requestedName.trim() : fallback, fallback, verdict.slug)
     if (!chosen.name) return { ok: false, code: 'invalid-name', message: '技能名不合法' }
-    const result = await this.installPrepared({ ...chosen, files: resolved.files, scope, workspace: ws, sessionId: options.sessionId || '', conflict: options.conflict, selector: options, verdict, sourceKind: 'remote', meta: { origin: 'market', installs: 0, author: '', version: '1.0.0', category: '', perm: 'files', source: `skills.sh/${id}`, description: verdict.summary, remoteId: id, remoteRepo: resolved.repo, remotePath: resolved.path, auditFindings: verdict.findings.length } })
+    const result = await this.installPrepared({ ...chosen, files: resolved.files, scope, workspace: ws, sessionId: options.sessionId || '', conflict: options.conflict, selector: options, verdict, sourceKind: 'remote', meta: { origin: 'market', installs: 0, author: '', version: '1.0.0', category: '', perm: 'unknown', source: `skills.sh/${id}`, description: verdict.summary, remoteId: id, remoteRepo: resolved.repo, remotePath: resolved.path, auditFindings: verdict.findings.length } })
     return { ...result, repo: resolved.repo, remotePath: resolved.path, source: resolved.source, files: resolved.files.map(item => item.path), findings: verdict.findings }
   }
 
@@ -3527,7 +3646,8 @@ class SkillDetective {
    * warning when the skills service or the agent scope is unavailable; the panel
    * then reports the real state instead of pretending the skill is loaded.
    */
-  createTempRegistration(sessionId, skill) {
+  createTempRegistration(sessionId, skill, auditEvidence) {
+    this.protection?.requireProtected(sessionId)
     const scopeCtx = this.ctx.get('agents').get(sessionId).ctx
     const { instanceId, ...input } = skill
     const directory = join(DSH_HOME, 'skill-detective', 'temp', sessionDirectoryId(sessionId), skill.name)
@@ -3541,14 +3661,14 @@ class SkillDetective {
     }
     scopeDispose = scopeCtx.effect(() => {
       invoked = true
-      const registered = scopeCtx.skills.register(payload)
+      const registered = scopedSkills(scopeCtx).register(payload)
       if (typeof registered === 'function') dispose = registered
       else if (typeof registered?.dispose === 'function') dispose = () => registered.dispose()
       else throw new Error('临时技能注册未返回释放句柄')
       return once
     }, 'skill-detective: temp skill')
     if (!invoked || disposed) throw new Error('临时技能作用域不可用')
-    record = { sessionId, skill: { ...skill }, dispose: async () => { await scopeDispose?.(); await once() } }
+    record = { sessionId, skill: { ...skill }, auditEvidence, dispose: async () => { await scopeDispose?.(); await once() } }
     if (instanceId) this.tempRegistrations.set(instanceId, record)
     return record
   }
@@ -3557,17 +3677,32 @@ class SkillDetective {
     if (!previous || this.disposed || !this.validSessionId(previous.sessionId)) return
     const id = previous.skill.instanceId
     if (this.tempRegistrations.get(id) === previous) return
+    const directory = await this.targetRoot('temp', '', previous.sessionId)
+    const snapshot = await readSkillSnapshot(join(directory, previous.skill.name))
+    const policy = await this.auditPolicy()
+    if (assessAuditEvidence(previous.auditEvidence, snapshot, policy).status !== 'current') throw skillError('audit-revalidation-required', '旧临时技能内容已变化，拒绝恢复旧注册')
     await this.releaseTemp(id)
-    this.createTempRegistration(previous.sessionId, previous.skill)
+    this.createTempRegistration(previous.sessionId, previous.skill, previous.auditEvidence)
   }
 
-  async registerTempFor(sessionId, skill) {
+  async registerTempFor(sessionId, skill, options = {}) {
     if (this.disposed || !this.validSessionId(sessionId)) return false
+    try { this.protection?.requireProtected(sessionId) } catch (error) { this.log('skill-detective: temporary activation requires session protection: ' + error.message); return false }
+    await this.state.load(); await this.index.load()
+    const directory = join(await this.targetRoot('temp', '', sessionId), skill.name)
+    const record = instanceRecord({ ...(this.index.data.skills[skill.instanceId] || {}), ...skill, path: directory, file: join(directory, 'SKILL.md'), scope: 'temp', sessionId })
+    const snapshot = await readSkillSnapshot(directory), policy = await this.auditPolicy()
+    const evidence = Object.hasOwn(options, 'auditEvidence') ? options.auditEvidence : this.auditEvidenceFor(record)
+    const audit = this.auditForSnapshot(record, snapshot, policy, evidence)
+    if (audit.status !== 'current') {
+      if (!Object.hasOwn(options, 'auditEvidence')) await this.persistAuditSnapshot(record, snapshot, policy)
+      this.log('skill-detective: temporary skill requires complete review: ' + audit.reason)
+      return false
+    }
     const previous = this.tempRegistrations.get(skill.instanceId)
     try {
-      // The registry is first-wins: the previous entry must leave before replacement.
       if (previous) await this.releaseTemp(skill.instanceId)
-      this.createTempRegistration(sessionId, skill)
+      this.createTempRegistration(sessionId, skill, evidence)
       return true
     } catch (error) {
       try { await this.restoreTempRegistration(previous) }
@@ -3580,16 +3715,17 @@ class SkillDetective {
   async restoreTempFor(sessionId) {
     return this.mutateSkills(async () => {
       if (this.disposed || !this.validSessionId(sessionId)) return
+      await this.state.load(); await this.index.load()
       const root = await this.targetRoot('temp', '', sessionId)
       const records = await scanRoot({ root, scope: 'global' })
       for (const skill of records) {
-        if (skill.disabled) continue
-        const record = instanceRecord({ ...skill, scope: 'temp', sessionId })
-        if (this.tempRegistrations.has(record.instanceId)) continue
-        const markdown = await readFile(record.file, 'utf8')
-        if (!await this.registerTempFor(sessionId, { name: record.name, description: record.description, content: bodyOf(markdown), whenToUse: record.whenToUse, instanceId: record.instanceId })) {
-          this.log('skill-detective: could not restore temporary skill ' + record.name + ' for ' + sessionId)
-        }
+        const record = instanceRecord({ ...(this.index.data.skills[skillInstanceId({ ...skill, path: skill.dir, scope: 'temp', sessionId })] || {}), ...skill, scope: 'temp', sessionId })
+        let checked
+        try { checked = await this.verifyInstalledAudit(record) }
+        catch (error) { this.log('skill-detective: temporary restore blocked: ' + error.message); continue }
+        if (skill.disabled || this.tempRegistrations.has(record.instanceId)) continue
+        const markdown = checked.snapshot.files.find(file => file.path === 'SKILL.md').text
+        if (!await this.registerTempFor(sessionId, { name: record.name, description: record.description, content: bodyOf(markdown), whenToUse: record.whenToUse, instanceId: record.instanceId }, { auditEvidence: checked.evidence })) this.log('skill-detective: could not restore temporary skill ' + record.name + ' for ' + sessionId)
       }
     })
   }
@@ -3600,6 +3736,7 @@ class SkillDetective {
       const current = await this.selectInstalled(selector, workspace, { sessionId })
       if (current.managed === false || !current.path) throw skillError('readonly', '插件自带的技能不可移动作用域')
       await assertNoSymlinkPath(join(current.path, 'SKILL.md'))
+      const verified = await this.verifyInstalledAudit(current)
       if (!['global', 'workspace', 'temp'].includes(targetScope)) throw skillError('bad-scope', '未知作用域')
       if (targetScope === 'temp' && !this.validSessionId(sessionId)) throw skillError('session-unavailable', '临时技能需要一个有效的当前会话')
       const ws = this.normalizeWorkspace(workspace || '')
@@ -3633,14 +3770,22 @@ class SkillDetective {
           const stage = join(dest.root, `.skill-detective-stage-${token}-${staged.length}`)
           staged.push(stage)
           await cp(current.path, stage, { recursive: true })
+          const copied = await readSkillSnapshot(stage)
+          if (!copied.ok || copied.contentHash !== verified.snapshot.contentHash) throw skillError('audit-content-changed', '移动副本与已审查完整目录不一致')
           if (existsSync(dest.path)) throw skillError('name-conflict', '目标目录在移动期间发生变化')
           await rename(stage, dest.path)
           published.push(dest.path)
         }
+        for (const record of records) {
+          const copied = await readSkillSnapshot(record.path)
+          const audit = this.auditForSnapshot(record, copied, await this.auditPolicy(), verified.evidence)
+          if (audit.status !== 'current') throw skillError('audit-content-changed', '移动期间目录变化或审查失效')
+          Object.assign(record, { contentHash: copied.contentHash, auditEvidence: verified.evidence, audit, snapshotCheckedAt: audit.checkedAt })
+        }
         if (targetScope === 'temp' && current.enabled) {
           const record = records[0]
           const markdown = await readFile(record.file, 'utf8')
-          const registered = await this.registerTempFor(sessionId, { name: record.name, description: record.description, content: bodyOf(markdown), whenToUse: record.whenToUse, instanceId: record.instanceId })
+          const registered = await this.registerTempFor(sessionId, { name: record.name, description: record.description, content: bodyOf(markdown), whenToUse: record.whenToUse, instanceId: record.instanceId }, { auditEvidence: verified.evidence })
           if (!registered) throw skillError('temp-registration-failed', '临时技能注册失败，移动已回滚')
           newRegistrations.push(record.instanceId)
         }
@@ -3651,7 +3796,7 @@ class SkillDetective {
         await this.state.update(data => {
           delete data.installs[current.instanceId]
           if (Object.values(oldIndex).filter(x => x.name === current.name).length === 1) delete data.installs[current.name]
-          for (const record of records) data.installs[record.instanceId] = { ...metadata, name: record.name, instanceId: record.instanceId, path: record.path, scope: record.scope, workspace: record.workspace, workspaces: record.scope === 'workspace' ? [record.workspace] : undefined, sessionId: record.sessionId, installedAt: metadata.installedAt || Date.now() }
+          for (const record of records) data.installs[record.instanceId] = { ...metadata, name: record.name, instanceId: record.instanceId, path: record.path, scope: record.scope, workspace: record.workspace, workspaces: record.scope === 'workspace' ? [record.workspace] : undefined, sessionId: record.sessionId, installedAt: metadata.installedAt || Date.now(), auditEvidence: verified.evidence }
         })
         await this.index.update(data => {
           delete data.skills[current.instanceId]
@@ -3680,22 +3825,41 @@ class SkillDetective {
       const target = await this.selectInstalled(selector, workspace, options)
       if (target.managed === false || !target.path) throw skillError('readonly', '插件自带的技能不可修改')
       await assertNoSymlinkPath(join(target.path, 'SKILL.md'))
-      const text = await readFile(join(target.path, 'SKILL.md'), 'utf8')
-      const next = setFrontmatterBoolean(text, 'disable-model-invocation', !enabled)
+      const before = await readSkillSnapshot(target.path), policy = await this.auditPolicy()
+      const oldEvidence = this.auditEvidenceFor(target)
+      const beforeAudit = this.auditForSnapshot(target, before, policy, oldEvidence)
+      if (enabled && beforeAudit.status !== 'current') {
+        await this.persistAuditSnapshot(target, before, policy)
+        throw skillError('audit-revalidation-required', beforeAudit.reason)
+      }
+      const text = before.ok ? before.files.find(file => file.path === 'SKILL.md').text : await readFile(join(target.path, 'SKILL.md'), 'utf8')
+      const operation = { type: 'toggle', enabled }, next = transformSkillFrontmatter(text, operation)
       const sessionId = typeof selector === 'object' ? selector.sessionId || options.sessionId || '' : options.sessionId || ''
       if (target.scope === 'temp' && enabled && !this.validSessionId(sessionId)) throw skillError('session-unavailable', '临时技能需要一个有效的当前会话')
       const oldRegistration = this.tempRegistrations.get(target.instanceId)
-      let registered = false
+      const oldState = structuredClone(this.state.data.installs), oldIndex = structuredClone(this.index.data.skills)
+      let registered = false, evidence = oldEvidence, staged
       try {
-        await this.atomicPublish(target.path, [{ path: 'SKILL.md', text: next }], { copyFrom: target.path, overwrite: true, warnings, finalize: async () => {
+        await this.atomicPublish(target.path, [{ path: 'SKILL.md', text: next }], { copyFrom: target.path, overwrite: true, warnings, validateStage: async stage => {
+          staged = await readSkillSnapshot(stage)
+          if (beforeAudit.status === 'current') {
+            const carried = carryControlledAudit(oldEvidence, before, staged, operation, policy)
+            if (!carried.ok) throw skillError('audit-revalidation-required', carried.audit.reason)
+            evidence = carried.audit
+          } else if (enabled) throw skillError('audit-revalidation-required', '启用前需要完整目录审查')
+        }, finalize: async () => {
+          const actual = await readSkillSnapshot(target.path)
+          if (enabled && (!actual.ok || actual.contentHash !== staged.contentHash)) throw skillError('audit-content-changed', '启用期间目录发生变化')
           if (target.scope === 'temp' && enabled) {
-            registered = await this.registerTempFor(sessionId, { name: target.name, description: target.description, content: bodyOf(next), whenToUse: target.whenToUse, instanceId: target.instanceId })
+            registered = await this.registerTempFor(sessionId, { name: target.name, description: target.description, content: bodyOf(next), whenToUse: target.whenToUse, instanceId: target.instanceId }, { auditEvidence: evidence })
             if (!registered) throw skillError('temp-registration-failed', '临时技能未能注册，启用已回滚')
           }
-          await this.index.update(index => { index.skills[target.instanceId] = { ...target, disabled: !enabled, fingerprint: hashText(next), at: Date.now() } })
+          await this.persistAuditSnapshot({ ...target, disabled: !enabled, fingerprint: hashText(next), at: Date.now() }, actual, await this.auditPolicy(), { evidence, releaseTemp: false })
         } })
       } catch (error) {
         if (registered) await this.cleanupCommitted(() => this.releaseTemp(target.instanceId), '失败启用的注册释放', warnings)
+        this.state.data.installs = oldState; this.index.data.skills = oldIndex
+        try { await this.state.save(); await this.index.save() } catch (rollbackError) { this.log('skill-detective: toggle state rollback failed: ' + rollbackError.message) }
         if (registered && oldRegistration) await this.cleanupCommitted(() => this.restoreTempRegistration(oldRegistration), '旧临时注册恢复', warnings)
         throw error
       }
@@ -3704,7 +3868,7 @@ class SkillDetective {
         else if (oldRegistration) await this.cleanupCommitted(() => oldRegistration.dispose?.(), '旧临时注册释放', warnings)
       }
       await this.cleanupCommitted(() => this.ctx.emit?.('skills/change'), '通知技能变更', warnings)
-      return { ok: true, name: target.name, instanceId: target.instanceId, enabled, warnings }
+      return { ok: true, name: target.name, instanceId: target.instanceId, enabled, audit: this.index.data.skills[target.instanceId].audit, warnings }
     })
   }
 
@@ -3790,14 +3954,12 @@ class SkillDetective {
   }
 
   async detail(selector, workspace, options = {}) {
-    const target = await this.selectInstalled(selector, workspace, options)
+    const target = await this.selectInstalled(selector, workspace, { ...options, freshAudit: true })
     const status = !target.enabled
       ? '已禁用'
       : target.managed === false
         ? '插件自带（只读）'
-        : target.origin === 'user'
-          ? '本地'
-          : '已审查'
+        : target.audit?.status === 'current' ? '完整目录审查有效' : target.audit?.reason || '尚未完成完整目录审查'
     // Inline registry skills have no directory to walk.
     if (target.path === '') {
       return {
@@ -4103,6 +4265,14 @@ function openInFileManager(path) {
 
 export function apply(ctx) {
   const service = new SkillDetective(ctx)
+  service.protection = createProtectionService(service, ctx, {
+    store: new JsonStore(join(DSH_HOME, 'skill-detective', 'runtime-protection.json')),
+    promptFile: join(PROMPT_DIR, 'security-audit.md'),
+    policyVersion: AUDIT_POLICY_VERSION,
+    maxAgeMs: AUDIT_EVIDENCE_TTL,
+    controlRoots: [...new Set([DSH_HOME, PLUGIN_DIR, dirname(process.execPath)])],
+  })
+  ctx.effect(() => () => service.protection.dispose(), 'skill-detective: execution protection cleanup')
 
   ctx.effect(() => ctx.on('agent/created', async ({ agent }) => {
     try { await service.restoreTempFor(agent.id) }
@@ -4198,12 +4368,13 @@ export function apply(ctx) {
               service.log(`skill-detective: refresh before state failed: ${error instanceof Error ? error.message : String(error)}`)
             }
             const state = await service.state.load()
-            const installed = await service.listInstalled(workspace, { sessionId })
+            const installed = await service.listInstalled(workspace, { sessionId, freshAudit: true })
             return sendJson(res, 200, {
               ok: true,
               workspace,
               sessionId,
               sessionAvailable: sessionId !== '',
+              protection: service.protection.status(sessionId),
               sessions: sessionChoices(service, state, sessionId),
               workspaces: service.workspaceList(),
               dshHome: DSH_HOME,
@@ -4296,6 +4467,22 @@ export function apply(ctx) {
 
           const body = await readJsonBody(req)
 
+          if (route === '/protection') {
+            if (typeof body.enabled !== 'boolean' || !['read-only', 'workspace-write'].includes(body.mode)) {
+              throw requestError(400, 'invalid-protection', '保护状态必须为布尔值，模式必须为只读或工作区写入')
+            }
+            return sendJson(res, 200, await service.protection.set(String(body.sessionId ?? ''), body.enabled, body.mode))
+          }
+
+          // Only the Web user's explicit session policy can activate installs.
+          // Review/preview and disabling remain available without tool grants.
+          if (['/install', '/remote/install', '/replace', '/learn-all'].includes(route)
+            || route === '/learn' && body.dryRun !== true
+            || route === '/toggle' && body.enabled === true
+            || route === '/scope' && ['global', 'workspace', 'temp'].includes(body.scope)) {
+            service.protection.requireProtected(String(body.sessionId ?? ''))
+          }
+
           if (route === '/scan') {
             return sendJson(res, 200, await service.scanOnce('manual'))
           }
@@ -4361,6 +4548,12 @@ export function apply(ctx) {
             const text = String(body.text ?? '')
             const workspace = service.normalizeWorkspace(body.workspace ?? '')
             return sendJson(res, 200, { ok: true, analysis: await service.analyze(text, workspace, String(body.sessionId ?? '')) })
+          }
+
+          if (route === '/review') {
+            const selector = skillSelector(body)
+            const workspace = service.normalizeWorkspace(body.workspace ?? '')
+            return sendJson(res, 200, await service.reviewInstalled(selector, workspace, { sessionId: selector.sessionId }))
           }
 
           if (route === '/learn') {
@@ -4464,6 +4657,10 @@ export function apply(ctx) {
             'stale-instance': 409,
             'name-conflict': 409,
             'temp-registration-failed': 409,
+            'audit-revalidation-required': 409,
+            'audit-content-changed': 409,
+            'audit-unverifiable': 409,
+            'audit-rejected': 409,
             'scope-conflict': 409,
             'target-conflict': 409,
             'readonly': 403,
@@ -4480,6 +4677,10 @@ export function apply(ctx) {
 
 /** Pure helpers exported for the Node test suite; not part of the plugin API. */
 export const __test = {
+  AUDIT_POLICY_VERSION,
+  PROMPT_DIR,
+  readSkillSnapshot,
+  readSkillSnapshotSync,
   replacementGroupOf,
   isReplacementSkill,
   compareSkillVersions,
@@ -4498,7 +4699,6 @@ export const __test = {
   evaluateSkill,
   buildMergedSkill,
   AUDIT_CACHE_TTL,
-  AUDIT_POLICY_VERSION,
   AuditCache,
   AUDIT_CHUNK_CHARS,
   MAX_SKILL_FILE_BYTES,

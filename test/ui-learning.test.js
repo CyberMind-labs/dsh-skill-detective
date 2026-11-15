@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readFile, mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
 import { __test as host } from '../index.js'
 
@@ -357,11 +359,195 @@ test('section parsing keeps fenced headings inside the original section', () => 
   assert.ok(sections[0].content.includes('## not a section'))
 })
 
-test('document quality scores do not use popularity as task matching evidence', () => {
+test('document checks report observed structure from supplied content without a total score', () => {
   const entry = { name: 'fixture', description: 'Example', body: '# fixture\n\n## 流程\n1. One\n2. Two\n3. Three\n\n## 验收\nCheck.', perm: 'files', installs: 0 }
-  assert.equal(host.evaluateSkill(entry).score, host.evaluateSkill({ ...entry, installs: 1_000_000 }).score)
+  assert.deepEqual(host.evaluateSkill(entry), host.evaluateSkill({ ...entry, installs: 1_000_000 }))
+  const actual = host.evaluateSkill(entry, '# Installed version\n\nPlain instructions only.', 'installed-file')
+  assert.equal('score' in actual, false)
+  assert.equal(actual.basis, 'installed-file')
+  assert.equal(actual.effectValidation, 'unverified')
+  assert.equal(actual.checks.find(check => check.id === 'acceptance').status, 'missing')
+  const fenced = host.evaluateSkill(entry, '```md\n1. Sample code line\n## 验收\n```\n', 'installed-file')
+  assert.equal(fenced.checks.find(check => check.id === 'numbered-steps').count, 0)
+  assert.equal(fenced.checks.find(check => check.id === 'acceptance').status, 'missing')
   const { client } = createClient(async () => response({ ok: true }))
-  assert.equal(client.zh.matchScore, '文档质量分')
+  const view = client.DocumentChecks({ checks: actual.checks, contentSource: actual.basis, t })
+  assert.ok(elements(view).some(node => node.props.children.includes('effectUnverified')))
+  assert.equal(client.zh.matchScore, undefined)
+})
+
+test('learning checks installed peer file content and never substitutes a template for unreadable installed content', async () => {
+  const project = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+  const artifacts = resolve(process.env.DSH_TEST_ARTIFACTS ?? join(project, '../test-artifacts/fix-2026-11-15'))
+  await mkdir(artifacts, { recursive: true })
+  for (const unreadable of [false, true]) {
+    const root = await mkdtemp(join(artifacts, 'document-checks-'))
+    const source = { ...skill('source', root), name: 'word-docx', path: join(root, 'word-docx'), version: '1.0.0' }
+    const peer = { ...skill('peer', root), name: 'markdown-writer', path: join(root, 'markdown-writer'), version: '1.0.0' }
+    await mkdir(source.path)
+    await mkdir(peer.path)
+    await writeFile(join(source.path, 'SKILL.md'), '# Installed Word source\n\nActual source instructions.')
+    const localText = '# Local Markdown peer\n\nLocal text without catalog acceptance steps.'
+    if (!unreadable) await writeFile(join(peer.path, 'SKILL.md'), localText)
+    const detective = Object.create(host.SkillDetective.prototype)
+    detective.selectInstalled = async () => source
+    detective.listInstalled = async () => [source, peer]
+    detective.reviewFiles = async () => ({ ok: true, poison: false, findings: [] })
+    const preview = await detective.learn({ instanceId: source.instanceId }, root, { dryRun: true, sessionId: 'live' })
+    const checked = preview.peers.find(item => item.name === 'markdown-writer')
+    assert.equal('score' in checked, false)
+    if (unreadable) {
+      assert.equal(preview.previewOnly, true)
+      assert.equal(checked.contentSource, 'unavailable')
+      assert.ok(checked.documentChecks.every(check => check.status === 'unavailable'))
+      assert.ok(preview.preserveSources.some(item => item.instanceId === peer.instanceId && item.reason.includes('SKILL.md')))
+    } else {
+      assert.equal(checked.contentSource, 'installed-file')
+      assert.equal(checked.documentChecks.find(check => check.id === 'acceptance').status, 'missing')
+      assert.ok(preview.merged.markdown.includes(localText))
+    }
+  }
+})
+
+test('audit labels require explicit evidence and expose scope, time, fingerprint and unverified effects', () => {
+  const { client } = createClient(async () => response({ ok: true }))
+  const legacy = { ...skill('one'), origin: 'market', auditVerdict: 'allow' }
+  assert.equal(client.auditView(legacy, t).status, 'unreviewed')
+  const row = client.Row({ skill: legacy, t })
+  assert.ok(elements(row).some(node => node.props['data-audit-status'] === 'unreviewed' && node.props.children.includes('auditUnreviewed')))
+  for (const status of ['unreviewed', 'current', 'changed', 'unverifiable', 'expired', 'rejected']) {
+    const selected = { ...legacy, audit: { status, scope: 'full-directory', reviewedAt: 1_800_000_000_000, fingerprint: 'abc123def4567890', currentFingerprint: status === 'changed' ? 'changed000111' : 'abc123def4567890' } }
+    assert.equal(client.auditView(selected, t).status, status)
+    const evidence = client.AuditEvidence({ skill: selected, t })
+    assert.ok(elements(evidence).some(node => node.props.children.includes('auditFullDirectory')))
+    assert.ok(elements(evidence).some(node => node.props.children.includes('abc123def456')))
+    assert.ok(elements(evidence).some(node => node.props.children.includes('auditEvidenceHint')))
+  }
+})
+
+test('review again uses the selected session and exact instance, refreshes, and shows failures', async () => {
+  const calls = []
+  let fail = false
+  let reviewed = 0
+  let status = 'unreviewed'
+  const selected = skill('target')
+  const app = createClient(async (url, options) => {
+    calls.push({ url, body: options.body ? JSON.parse(options.body) : null })
+    if (url.endsWith('/review')) {
+      status = fail ? 'unverifiable' : 'current'
+      return response(fail ? { ok: false, code: 'audit-unavailable', message: 'Review unavailable' } : { ok: true })
+    }
+    return response({ ok: true, skill: { ...selected, audit: { status } }, preview: '', tree: [] })
+  })
+  const detail = app.mount(app.client.DetailModal, { skill: selected, workspace: '/work/a', sessionId: 'selected-session', t, onClose() {}, onReviewed() { reviewed += 1 } })
+  detail.render()
+  await flush()
+  await button(detail.render(), 'reviewAgain').props.onClick()
+  detail.render()
+  await flush()
+  assert.deepEqual(calls.find(call => call.url.endsWith('/review')).body, { name: selected.name, instanceId: selected.instanceId, path: selected.path, workspace: '/work/a', sessionId: 'selected-session' })
+  assert.equal(reviewed, 1)
+  assert.equal(elements(detail.render()).find(node => node.type === app.client.AuditEvidence).props.skill.audit.status, 'current')
+  fail = true
+  await button(detail.render(), 'reviewAgain').props.onClick()
+  detail.render()
+  await flush()
+  assert.ok(elements(detail.render()).some(node => node.props.children.includes('Review unavailable')))
+  assert.equal(elements(detail.render()).find(node => node.type === app.client.AuditEvidence).props.skill.audit.status, 'unverifiable')
+  const withoutSession = app.mount(app.client.DetailModal, { skill: selected, workspace: '/work/a', t, onClose() {} })
+  const reviewButton = button(withoutSession.render(), 'reviewAgain')
+  assert.equal(reviewButton.props.disabled, true)
+  const before = calls.filter(call => call.url.endsWith('/review')).length
+  await reviewButton.props.onClick()
+  assert.equal(calls.filter(call => call.url.endsWith('/review')).length, before)
+})
+
+test('session protection defaults to read-only and writes require an explicit user selection', async () => {
+  const calls = []
+  let refreshed = 0
+  const app = createClient(async (url, options) => { calls.push({ url, body: JSON.parse(options.body) }); return response({ ok: true }) })
+  const controls = app.mount(app.client.ProtectionControls, {
+    sessionId: 'chosen-session', protection: { available: true, enabled: false, workspace: '/work/a' }, t, onChanged() { refreshed += 1 },
+  })
+  let view = controls.render()
+  assert.equal(elements(view).find(node => node.type === 'select').props.value, 'read-only')
+  assert.equal(calls.length, 0, 'Mounting or reading state must not change protection')
+  assert.ok(elements(view).some(node => node.props.children.includes('protectionOff')))
+  assert.ok(elements(view).some(node => node.props.children.includes('protectionLimits')))
+  await button(view, 'protectionEnable').props.onClick()
+  assert.deepEqual(calls[0], { url: '/api/dsh-skill-detective/protection', body: { sessionId: 'chosen-session', enabled: true, mode: 'read-only' } })
+  view = controls.render()
+  elements(view).find(node => node.type === 'select').props.onChange({ target: { value: 'workspace-write' } })
+  await button(controls.render(), 'protectionEnable').props.onClick()
+  assert.deepEqual(calls[1].body, { sessionId: 'chosen-session', enabled: true, mode: 'workspace-write' })
+  assert.equal(refreshed, 2)
+})
+
+test('disabling protection targets only the selected session and never happens automatically', async () => {
+  const calls = []
+  const app = createClient(async (_url, options) => { calls.push(JSON.parse(options.body)); return response({ ok: true }) })
+  const controls = app.mount(app.client.ProtectionControls, { sessionId: 'chosen-session', protection: { available: true, enabled: true, mode: 'workspace-write' }, t })
+  const view = controls.render()
+  assert.equal(calls.length, 0)
+  assert.ok(elements(view).some(node => node.props.children.some(child => String(child).includes('protectionOn'))))
+  await button(view, 'protectionDisable').props.onClick()
+  assert.deepEqual(calls, [{ sessionId: 'chosen-session', enabled: false, mode: 'read-only' }])
+})
+
+test('unavailable session protection is explicit and cannot be submitted through disabled controls', async () => {
+  const calls = []
+  const app = createClient(async (...args) => { calls.push(args); return response({ ok: true }) })
+  const controls = app.mount(app.client.ProtectionControls, { sessionId: 'chosen-session', protection: { available: false, enabled: false, reason: 'Tool guard unavailable' }, t })
+  const view = controls.render()
+  assert.ok(elements(view).some(node => node.props.children.includes('protectionUnavailable')))
+  assert.ok(elements(view).some(node => node.props.children.includes('Tool guard unavailable')))
+  assert.equal(button(view, 'protectionEnable').props.disabled, true)
+  await button(view, 'protectionEnable').props.onClick()
+  assert.equal(calls.length, 0)
+  assert.ok(elements(controls.render()).some(node => node.props.role === 'alert' && node.props.children.includes('Tool guard unavailable')))
+})
+
+test('an enabled policy with an unavailable guard can be explicitly disabled but never enabled or elevated', async () => {
+  const calls = []
+  const app = createClient(async (url, options) => { calls.push({ url, body: JSON.parse(options.body) }); return response({ ok: true }) })
+  const controls = app.mount(app.client.ProtectionControls, {
+    sessionId: 'selected-session', protection: { available: false, enabled: true, mode: 'read-only', reason: 'Host guard unavailable' }, t,
+  })
+  let view = controls.render()
+  assert.equal(button(view, 'protectionUpdate').props.disabled, true)
+  assert.equal(elements(view).find(node => node.type === 'select').props.disabled, true)
+  await button(view, 'protectionUpdate').props.onClick()
+  assert.equal(calls.length, 0, 'An unavailable host cannot enable or upgrade execution permissions')
+  view = controls.render()
+  assert.equal(button(view, 'protectionDisable').props.disabled, false)
+  await button(view, 'protectionDisable').props.onClick()
+  assert.deepEqual(calls, [{ url: '/api/dsh-skill-detective/protection', body: { sessionId: 'selected-session', enabled: false, mode: 'read-only' } }])
+})
+
+test('protection request failures stay visible and never report an enabled session', async () => {
+  const app = createClient(async () => response({ ok: false, code: 'protection-unavailable', message: 'Guard was disposed' }))
+  const controls = app.mount(app.client.ProtectionControls, { sessionId: 'chosen-session', protection: { available: true, enabled: false }, t })
+  await button(controls.render(), 'protectionEnable').props.onClick()
+  const view = controls.render()
+  assert.ok(elements(view).some(node => node.props.children.includes('protectionOff')))
+  assert.ok(elements(view).some(node => node.props.role === 'alert' && node.props.children.includes('Guard was disposed')))
+})
+
+test('enabling a skill without protection directs the user to protection settings without changing them', async () => {
+  const calls = []
+  const selected = { ...skill('chosen'), enabled: false }
+  const app = createClient(async (url, options) => {
+    calls.push(url)
+    if (url.includes('/state')) return response({ ok: true, ...settings([selected]), sessionId: 'chosen-session', sessionAvailable: true, protection: { available: true, enabled: false } })
+    return response({ ok: false, code: 'protection-required', message: 'Protection disabled' })
+  })
+  const manager = app.mount(app.client.ManagerPanel, { t, sessionId: 'chosen-session' })
+  manager.render()
+  await flush()
+  const row = elements(manager.render()).find(node => node.type === app.client.Row)
+  await row.props.onToggle(selected)
+  assert.ok(elements(manager.render()).some(node => node.props.className === 'sd-toast' && node.props.children.includes('protectionRequired')))
+  assert.equal(calls.filter(url => url.endsWith('/protection')).length, 0)
 })
 
 

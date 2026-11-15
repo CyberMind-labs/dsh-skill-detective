@@ -94,6 +94,14 @@ test('HTTP routes reject malformed bodies and select exact workspace skill insta
     workspaceRegistry: { list: () => [{ path: workspaceA, title: 'A' }, { path: workspaceB, title: 'B' }] },
     skills: { list: async () => [], register: () => () => {} },
     agents: { get: id => id === 'session-live' ? { ctx: scoped } : undefined },
+    agentDefaultModel: { currentSelection: () => ({ provider: 'local-fixture', model: 'deterministic-audit' }) },
+    llm: {
+      listProviders: () => [{ id: 'local-fixture' }],
+      async *stream(request) {
+        assert.equal(request.sessionId, 'session-live')
+        yield { type: 'text-delta', text: JSON.stringify({ verdict: 'safe', severity: 'low', findings: [], summary: 'Local deterministic fixture review', capabilities: ['fixture'], triggers: ['fixture'], slug: '' }) }
+      },
+    },
   }
   const ctx = {
     get: name => services[name], logger: { info() {} },
@@ -130,6 +138,22 @@ test('HTTP routes reject malformed bodies and select exact workspace skill insta
     assert.equal(target.workspace, workspaceB)
     assert.ok(target.instanceId)
     const selector = { name: target.name, instanceId: target.instanceId, path: target.path, workspace: workspaceB, sessionId: 'session-live' }
+    assert.equal(target.audit.status, 'unreviewed')
+    const missingReviewSession = await request('/review', { ...selector, sessionId: '' })
+    assert.equal(missingReviewSession.body.ok, false)
+    assert.equal(missingReviewSession.body.code, 'session-unavailable')
+    const reviewed = await request('/review', selector)
+    assert.equal(reviewed.body.ok, true, JSON.stringify(reviewed.body))
+    assert.equal(reviewed.body.audit.status, 'current')
+    assert.equal(reviewed.body.audit.scope, 'full-directory')
+    const refreshed = (await request(`/state${query}`)).body.installed.find(item => item.instanceId === selector.instanceId)
+    assert.equal(refreshed.audit.status, 'current')
+    assert.ok(refreshed.audit.checkedAt)
+    await writeFile(join(target.path, '.companion.txt'), 'NEW_HIDDEN_COMPANION')
+    const changed = (await request(`/state${query}`)).body.installed.find(item => item.instanceId === selector.instanceId)
+    assert.equal(changed.audit.status, 'changed', 'state refresh must not reuse its scan TTL approval')
+    const detail = await request(`/detail${query}&instanceId=${encodeURIComponent(selector.instanceId)}&name=${selector.name}&path=${encodeURIComponent(selector.path)}`)
+    assert.equal(detail.body.skill.audit.status, 'changed')
     assert.equal((await request('/toggle', { ...selector, enabled: false })).body.ok, true)
     assert.doesNotMatch(await readFile(join(workspaceA, '.dsh/skills/shared-skill/SKILL.md'), 'utf8'), /disable-model-invocation: true/)
     assert.match(await readFile(join(workspaceB, '.dsh/skills/shared-skill/SKILL.md'), 'utf8'), /disable-model-invocation: true/)

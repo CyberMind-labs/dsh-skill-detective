@@ -25,6 +25,9 @@
   },
   "files": [
     "index.js",
+    "audit-evidence.js",
+    "runtime-policy.js",
+    "protection-service.js",
     "catalog.js",
     "client.js",
     "cordis.patch.yml",

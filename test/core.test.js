@@ -203,6 +203,12 @@ test('analyze reads only the cached index and never triggers a disk scan', async
     description: 'SQLite 查询工具',
   }
   const now = Date.now()
+  const policy = await service.auditPolicy()
+  // Exercise the cached recommendation path with evidence from a prior scan.
+  const contentHash = 'a'.repeat(64)
+  const auditEvidence = { scope: 'full-directory', fingerprint: contentHash,
+    reviewedAt: now, expiresAt: now + 60_000, verdict: 'allow',
+    policyVersion: policy.policyVersion, promptHash: policy.promptHash }
   const indexData = {
     at: now,
     scan: { at: now, reason: 'test', total: installed.length, roots: [], registry: false },
@@ -215,6 +221,9 @@ test('analyze reads only the cached index and never triggers a disk scan', async
       kind: 'local',
       disabled: false,
       fingerprint: 'x',
+      contentHash,
+      auditEvidence,
+      snapshotCheckedAt: now,
       bytes: 0,
       at: now,
       firstSeenAt: now,

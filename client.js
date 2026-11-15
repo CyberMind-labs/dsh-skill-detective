@@ -77,7 +77,7 @@ window.__ModuleLoader__.load({
       scope: '作用域',
       installedAt: '安装时间',
       status: '状态',
-      perm: '最高权限',
+      perm: '目录权限提示（非执行授权）',
       fileTree: '文件结构',
       preview: 'SKILL.md 预览',
       scopeTemp: '临时（仅当前会话）',
@@ -125,7 +125,7 @@ window.__ModuleLoader__.load({
       learned: '结构整合',
       groupLearned: '结构整合',
       learnTitle: '技能文档整合',
-      learnHint: '保留相关技能的完整来源内容，按结构汇编为新文档。请先检查预览；文档质量分不代表能力匹配或效果提升。',
+      learnHint: '保留相关技能的完整来源内容，按结构汇编为新文档。以下仅检查文档结构，实际效果未验证。',
       learnPick: '选择要学习的技能',
       analyzePeers: '分析同类',
       analyzing: '分析中…',
@@ -149,7 +149,54 @@ window.__ModuleLoader__.load({
       installAlt: '安装替代',
       noUpdates: '没有可检查的技能',
       learnedOk: '已生成 {name}',
-      matchScore: '文档质量分',
+      documentChecks: '文档检查',
+      documentChecksMissing: '尚无文档检查结果',
+      effectUnverified: '实际效果未验证',
+      documentBasis: '检查依据',
+      documentInstalled: '已安装文件正文',
+      documentCatalog: '内置目录模板',
+      documentProvided: '参与整合的文本',
+      documentUnavailable: '文件无法读取',
+      checkCodeExample: '围栏代码示例',
+      checkAcceptance: '验收或检查章节',
+      checkCautions: '注意事项或限制章节',
+      checkNumberedSteps: '编号步骤',
+      checkPresent: '已检测到',
+      checkMissing: '未检测到',
+      checkIncomplete: '围栏未闭合',
+      checkUnavailable: '无法检查',
+      auditUnreviewed: '未审查',
+      auditCurrent: '审查记录有效',
+      auditChanged: '审查后内容已变化',
+      auditUnverifiable: '无法核验审查记录',
+      auditExpired: '审查记录已过期',
+      auditRejected: '审查未通过',
+      auditScope: '审查范围',
+      auditFullDirectory: '完整技能目录',
+      auditSkillMarkdown: '仅 SKILL.md',
+      auditPartial: '部分文件',
+      auditUnknownScope: '未记录范围',
+      auditReviewedAt: '审查时间',
+      auditFingerprint: '审查时文件指纹',
+      auditCurrentFingerprint: '当前文件指纹',
+      auditNotRecorded: '未记录',
+      auditEvidenceHint: '审查记录仅针对所列文件和时间，不保证运行安全；实际效果未验证。',
+      reviewAgain: '重新审查',
+      reviewing: '正在审查…',
+      protectionTitle: '会话工具保护',
+      protectionOff: '受限执行未开启',
+      protectionOn: '所选会话保护已开启',
+      protectionUnavailable: '此会话无法提供工具保护',
+      protectionReadOnly: '只读：工作区文件读取',
+      protectionWorkspaceWrite: '工作区内文件读写',
+      protectionLimits: '仅约束所选会话的工具调用：允许工作区文件读取，可选允许工作区写入；只读模式不允许写入。拒绝 shell、terminal、外联、任意代码执行及未知工具，脚本或联网类技能会受限。这不是全机沙箱。',
+      protectionMode: '设置运行范围',
+      protectionEnable: '开启受限执行',
+      protectionUpdate: '更新所选会话保护',
+      protectionDisable: '关闭所选会话保护',
+      protectionDisableHint: '关闭后，所选会话不再受该运行限制；已加载的技能内容仍可能留在对话历史中。',
+      protectionSaved: '所选会话保护设置已保存',
+      protectionRequired: '请在技能管理的“会话工具保护”中，先为所选会话开启受限执行，再安装或启用技能。',
       tempSessionRequired: '临时作用域需要一个有效会话，请关闭设置并先选择用于审查的会话。',
       workspaceRequired: '工作区作用域至少需要选择一个工作区。',
       processingInstall: '正在安装',
@@ -269,7 +316,7 @@ window.__ModuleLoader__.load({
       scope: 'Scope',
       installedAt: 'Installed',
       status: 'Status',
-      perm: 'Max permission',
+      perm: 'Catalog permission hint (not an execution grant)',
       fileTree: 'Files',
       preview: 'SKILL.md preview',
       scopeTemp: 'Temporary (this session)',
@@ -317,7 +364,7 @@ window.__ModuleLoader__.load({
       learned: 'Document merge',
       groupLearned: 'Document merges',
       learnTitle: 'Merge skill documents',
-      learnHint: 'Preserves complete source documents in a structured collection. Review the draft first; document quality does not measure task fit or improved capability.',
+      learnHint: 'Preserves complete source documents in a structured collection. These checks describe document structure only; actual effects remain unverified.',
       learnPick: 'Choose a skill to learn from',
       analyzePeers: 'Analyze peers',
       analyzing: 'Analyzing…',
@@ -341,7 +388,54 @@ window.__ModuleLoader__.load({
       installAlt: 'Install',
       noUpdates: 'No skills to check',
       learnedOk: 'Created {name}',
-      matchScore: 'Document quality',
+      documentChecks: 'Document checks',
+      documentChecksMissing: 'No document checks available',
+      effectUnverified: 'Actual effects unverified',
+      documentBasis: 'Checked content',
+      documentInstalled: 'Installed file content',
+      documentCatalog: 'Built-in catalog template',
+      documentProvided: 'Merge input text',
+      documentUnavailable: 'File could not be read',
+      checkCodeExample: 'Fenced code examples',
+      checkAcceptance: 'Acceptance or checklist section',
+      checkCautions: 'Cautions or limitations section',
+      checkNumberedSteps: 'Numbered steps',
+      checkPresent: 'Detected',
+      checkMissing: 'Not detected',
+      checkIncomplete: 'Unclosed code fence',
+      checkUnavailable: 'Could not check',
+      auditUnreviewed: 'Not reviewed',
+      auditCurrent: 'Review record current',
+      auditChanged: 'Content changed since review',
+      auditUnverifiable: 'Review record cannot be verified',
+      auditExpired: 'Review record expired',
+      auditRejected: 'Review rejected',
+      auditScope: 'Review scope',
+      auditFullDirectory: 'Complete skill directory',
+      auditSkillMarkdown: 'SKILL.md only',
+      auditPartial: 'Partial file set',
+      auditUnknownScope: 'Scope not recorded',
+      auditReviewedAt: 'Reviewed at',
+      auditFingerprint: 'Reviewed file fingerprint',
+      auditCurrentFingerprint: 'Current file fingerprint',
+      auditNotRecorded: 'Not recorded',
+      auditEvidenceHint: 'The review record applies only to the listed files and time. It does not guarantee runtime safety; actual effects remain unverified.',
+      reviewAgain: 'Review again',
+      reviewing: 'Reviewing…',
+      protectionTitle: 'Session tool protection',
+      protectionOff: 'Restricted execution is off',
+      protectionOn: 'Protection is on for the selected session',
+      protectionUnavailable: 'Tool protection is unavailable for this session',
+      protectionReadOnly: 'Read-only workspace files',
+      protectionWorkspaceWrite: 'Read and write workspace files',
+      protectionLimits: 'Applies only to tool calls in the selected session: workspace file reads, with optional workspace writes. Read-only mode cannot write. Shells, terminals, outbound access, arbitrary code execution and unknown tools are denied, limiting skills that require scripts or networks. This is not a machine-wide sandbox.',
+      protectionMode: 'Execution scope to apply',
+      protectionEnable: 'Enable restricted execution',
+      protectionUpdate: 'Update selected-session protection',
+      protectionDisable: 'Disable selected-session protection',
+      protectionDisableHint: 'Disabling removes these execution limits for the selected session. Previously loaded skill content may remain in conversation history.',
+      protectionSaved: 'Protection settings saved for the selected session',
+      protectionRequired: 'Open Session tool protection in Skills and enable restricted execution for the selected session before installing or enabling skills.',
       tempSessionRequired: 'Temporary scope needs a valid session. Close settings and choose a session for review first.',
       workspaceRequired: 'Select at least one workspace for workspace scope.',
       processingInstall: 'Installing',
@@ -585,11 +679,17 @@ window.__ModuleLoader__.load({
 .sd-peer:last-child { border-bottom: none; }
 .sd-peer .nm { font-weight: 600; font-size: 13px; }
 .sd-peer .meta { color: #7a7f88; font-size: 11.5px; }
-.sd-score { margin-left: auto; font-size: 12px; color: #35e0d2; white-space: nowrap; }
 .sd-authors { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .sd-author { font-size: 11.5px; padding: 2px 9px; border-radius: 999px; background: rgba(122,170,255,.1); color: #7aaaff; border: 1px solid rgba(122,170,255,.25); }
 .sd-learn-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
 .sd-hint { color: #7a7f88; font-size: 12px; line-height: 1.6; }
+.sd-panel.sd-protection { background: Canvas; color: CanvasText; border-color: color-mix(in srgb, CanvasText 18%, Canvas); box-shadow: none; }
+.sd-protection h4, .sd-protection [role="status"] { color: inherit; }
+.sd-protection .sd-hint { color: color-mix(in srgb, CanvasText 78%, Canvas); }
+.sd-protection .sd-select, .sd-protection .sd-btn:not(.primary) { background: Canvas; color: CanvasText; border-color: color-mix(in srgb, CanvasText 25%, Canvas); }
+.sd-protection .sd-btn:not(.primary):hover { background: color-mix(in srgb, CanvasText 7%, Canvas); }
+.sd-protection .sd-modal-foot { border-color: color-mix(in srgb, CanvasText 15%, Canvas); }
+.sd-protection .sd-protection-error { color: color-mix(in srgb, CanvasText 75%, #dc2626); }
 .sd-upd-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,.05); }
 .sd-upd-row:last-child { border-bottom: none; }
 .sd-upd-row .nm { font-weight: 600; font-size: 13px; }
@@ -814,12 +914,118 @@ window.__ModuleLoader__.load({
         poison: 'securityRejected', 'all-poisoned': 'securityRejected', 'audit-unavailable': 'auditUnavailable',
         'session-unavailable': 'sessionUnavailable', 'invalid-session': 'sessionUnavailable',
         'registration-failed': 'sessionUnavailable', 'write-failed': 'writeFailed', 'resolve-failed': 'resolveFailed',
+        'protection-required': 'protectionRequired',
       }
       return {
         kind: ['none-found', 'no-need', 'no-peers'].includes(code) ? 'none' : 'failed',
-        message: failed?.detail || payload?.message || payload?.error?.message || (keys[code] ? t(keys[code]) : t('installFailed')),
+        message: code === 'protection-required' ? t('protectionRequired') : failed?.detail || payload?.message || payload?.error?.message || (keys[code] ? t(keys[code]) : t('installFailed')),
         code,
       }
+    }
+
+    function actionMessage(error, t) {
+      return error?.code === 'protection-required' ? t('protectionRequired') : error?.message || t('failTitle')
+    }
+
+    function auditView(skill, t) {
+      const audit = skill?.audit && typeof skill.audit === 'object' ? skill.audit : {}
+      const labels = {
+        unreviewed: 'auditUnreviewed', current: 'auditCurrent', changed: 'auditChanged',
+        unverifiable: 'auditUnverifiable', expired: 'auditExpired', rejected: 'auditRejected',
+      }
+      const status = typeof audit.status !== 'string' ? 'unreviewed' : labels[audit.status] ? audit.status : 'unverifiable'
+      const scopes = { 'full-directory': 'auditFullDirectory', 'skill-md': 'auditSkillMarkdown', partial: 'auditPartial' }
+      const reviewedAt = typeof audit.reviewedAt === 'number' && Number.isFinite(audit.reviewedAt) && audit.reviewedAt > 0
+        ? new Date(audit.reviewedAt).toLocaleString() : t('auditNotRecorded')
+      return {
+        status, label: t(labels[status]), scope: t(scopes[audit.scope] || 'auditUnknownScope'), reviewedAt,
+        fingerprint: typeof audit.fingerprint === 'string' ? audit.fingerprint : '',
+        currentFingerprint: typeof audit.currentFingerprint === 'string' ? audit.currentFingerprint : '',
+        reason: typeof audit.reason === 'string' ? audit.reason : '',
+      }
+    }
+
+    function AuditEvidence({ skill, t, compact = false }) {
+      const audit = auditView(skill, t)
+      const fingerprint = audit.fingerprint ? audit.fingerprint.slice(0, 12) : t('auditNotRecorded')
+      if (compact) return h('div', { className: 'sd-subline', 'data-audit-status': audit.status },
+        `${t('auditScope')}：${audit.scope} · ${audit.reviewedAt} · `,
+        h('span', { title: audit.fingerprint || undefined }, fingerprint),
+        ` · ${t('effectUnverified')}`,
+      )
+      return h('div', { 'data-audit-status': audit.status },
+        h('dl', { className: 'sd-kv' },
+          h('dt', null, t('status')), h('dd', null, audit.label),
+          h('dt', null, t('auditScope')), h('dd', null, audit.scope),
+          h('dt', null, t('auditReviewedAt')), h('dd', null, audit.reviewedAt),
+          h('dt', null, t('auditFingerprint')), h('dd', { title: audit.fingerprint || undefined }, fingerprint),
+          audit.currentFingerprint && audit.currentFingerprint !== audit.fingerprint ? h(React.Fragment, null,
+            h('dt', null, t('auditCurrentFingerprint')), h('dd', { title: audit.currentFingerprint }, audit.currentFingerprint.slice(0, 12)),
+          ) : null,
+        ),
+        audit.reason ? h('div', { className: 'sd-hint' }, audit.reason) : null,
+        h('div', { className: 'sd-hint' }, t('auditEvidenceHint')),
+      )
+    }
+
+    function DocumentChecks({ checks, contentSource, t }) {
+      const labels = { 'code-example': 'checkCodeExample', acceptance: 'checkAcceptance', cautions: 'checkCautions', 'numbered-steps': 'checkNumberedSteps' }
+      const states = { present: 'checkPresent', missing: 'checkMissing', incomplete: 'checkIncomplete', unavailable: 'checkUnavailable' }
+      const basis = { 'installed-file': 'documentInstalled', 'catalog-template': 'documentCatalog', 'provided-content': 'documentProvided', unavailable: 'documentUnavailable' }
+      const list = Array.isArray(checks) ? checks : []
+      return h('div', { className: 'sd-hint', style: { marginTop: 6 } },
+        h('div', null, `${t('documentChecks')} · ${t('documentBasis')}：${t(basis[contentSource] || 'documentProvided')}`),
+        list.length > 0 ? h('ul', null, list.map(check => h('li', { key: check.id },
+          `${t(labels[check.id] || 'documentChecks')}：${t(states[check.status] || 'checkUnavailable')}${typeof check.count === 'number' ? ` (${check.count})` : ''}`,
+        ))) : h('div', null, t('documentChecksMissing')),
+        h('div', null, t('effectUnverified')),
+      )
+    }
+
+    function ProtectionControls({ sessionId, protection, onChanged, t }) {
+      const [mode, setMode] = useState('read-only')
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      const currentSession = useRef(sessionId)
+      currentSession.current = sessionId
+      useEffect(() => { setMode('read-only'); setError('') }, [sessionId])
+      const available = protection?.available === true
+      const enabled = protection?.enabled === true
+      const update = async nextEnabled => {
+        if (!sessionId) { setError(t('reviewSessionHint')); return }
+        if (!available && nextEnabled) { setError(protection?.reason || t('protectionUnavailable')); return }
+        if (busy) return
+        const targetSession = sessionId
+        setBusy(true)
+        setError('')
+        try {
+          await api('/protection', { body: { sessionId: targetSession, enabled: nextEnabled, mode: mode === 'workspace-write' ? 'workspace-write' : 'read-only' } })
+          if (currentSession.current === targetSession) onChanged?.()
+        } catch (err) {
+          if (currentSession.current === targetSession) setError(actionMessage(err, t))
+        } finally { setBusy(false) }
+      }
+      const activeMode = protection?.mode === 'workspace-write' ? t('protectionWorkspaceWrite') : t('protectionReadOnly')
+      return h('section', { className: 'sd-panel sd-protection', style: { margin: '0 18px 12px' }, 'aria-label': t('protectionTitle') },
+        h('h4', null, t('protectionTitle')),
+        h('div', { role: 'status' }, !sessionId || !available ? t('protectionUnavailable') : enabled ? `${t('protectionOn')} · ${activeMode}` : t('protectionOff')),
+        protection?.workspace ? h('div', { className: 'sd-hint' }, protection.workspace) : null,
+        protection?.reason ? h('div', { className: 'sd-hint' }, protection.reason) : null,
+        h('p', { className: 'sd-hint' }, t('protectionLimits')),
+        h('label', { className: 'sd-srow' },
+          h('span', null, t('protectionMode')),
+          h('select', { className: 'sd-select', 'aria-label': t('protectionMode'), value: mode, disabled: !sessionId || !available || busy, onChange: event => setMode(event.target.value) },
+            h('option', { value: 'read-only' }, t('protectionReadOnly')),
+            h('option', { value: 'workspace-write' }, t('protectionWorkspaceWrite')),
+          ),
+        ),
+        h('div', { className: 'sd-modal-foot' },
+          h('button', { className: 'sd-btn primary', type: 'button', disabled: !sessionId || !available || busy, onClick: () => update(true) }, enabled ? t('protectionUpdate') : t('protectionEnable')),
+          enabled ? h('button', { className: 'sd-btn', type: 'button', disabled: !sessionId || busy, onClick: () => update(false) }, t('protectionDisable')) : null,
+        ),
+        enabled ? h('p', { className: 'sd-hint' }, t('protectionDisableHint')) : null,
+        error ? h('div', { className: 'sd-protection-error', role: 'alert', style: { marginTop: 8 } }, error) : null,
+      )
     }
 
     function useToasts() {
@@ -1110,13 +1316,7 @@ window.__ModuleLoader__.load({
       const meta = ORIGIN_META[skill.origin] ?? ORIGIN_META.user
       const managed = skill.managed !== false
       const shownName = skill.displayName || skill.name
-      const status = !skill.enabled
-        ? { text: t('disabled'), cls: 'grey' }
-        : !managed
-          ? { text: t('bundledBadge'), cls: 'grey' }
-          : skill.origin === 'user'
-            ? { text: t('local'), cls: 'grey' }
-            : { text: t('reviewed'), cls: '' }
+      const audit = auditView(skill, t)
       const authorText = String(skill.author ?? '')
       const pluginLabel = skill.packageName || skill.provider || ''
       const sourceLine = skill.origin === 'user'
@@ -1159,7 +1359,8 @@ window.__ModuleLoader__.load({
             : null,
           h('div', { className: 'sd-meta' }, metaParts.join(' · ')),
           sourceLine ? h('div', { className: 'sd-subline' }, sourceLine) : null,
-          h('div', { className: `sd-subline${skill.permWarn ? ' warn' : ''}` }, `最高权限：${skill.permLabel}`),
+          h(AuditEvidence, { skill, t, compact: true }),
+          h('div', { className: `sd-subline${skill.permWarn ? ' warn' : ''}` }, `${t('perm')}：${skill.permLabel}`),
           !skill.enabled && managed
             ? h('button', {
               className: 'sd-replace',
@@ -1174,7 +1375,8 @@ window.__ModuleLoader__.load({
             : null,
         ),
         h('div', { className: 'sd-actions' },
-          h('span', { className: `sd-badge${status.cls ? ` ${status.cls}` : ''}` }, status.text),
+          h('span', { className: 'sd-badge grey', 'data-audit-status': audit.status }, audit.label),
+          !skill.enabled ? h('span', { className: 'sd-badge grey' }, t('disabled')) : null,
           h('button', { className: 'sd-iconbtn', type: 'button', title: t('detail'), onClick: () => onDetail(skill) }, iconInfo(15)),
           skill.path
             ? h('button', { className: 'sd-iconbtn', type: 'button', title: t('openFolder'), onClick: () => onOpen(skill) }, iconFolder(15))
@@ -1193,10 +1395,12 @@ window.__ModuleLoader__.load({
     }
 
     function DetailModal(props) {
-      const { skill: selectedSkill, workspace, sessionId, t, onClose, onOpen, onToggle, onDelete } = props
+      const { skill: selectedSkill, workspace, sessionId, t, onClose, onOpen, onToggle, onDelete, onReviewed } = props
       const name = selectedSkill.name
       const [data, setData] = useState(null)
       const [error, setError] = useState('')
+      const [reviewing, setReviewing] = useState(false)
+      const [reviewRevision, setReviewRevision] = useState(0)
 
       useEffect(() => {
         const onKey = event => {
@@ -1215,12 +1419,29 @@ window.__ModuleLoader__.load({
             if (alive) setData(payload)
           })
           .catch(err => {
-            if (alive) setError(err.message)
+            if (alive) setError(actionMessage(err, t))
           })
         return () => {
           alive = false
         }
-      }, [name, selectedSkill.instanceId, selectedSkill.path, workspace, sessionId])
+      }, [name, selectedSkill.instanceId, selectedSkill.path, workspace, sessionId, reviewRevision])
+
+      const review = async () => {
+        if (!sessionId) { setError(t('reviewSessionHint')); return }
+        if (reviewing) return
+        setReviewing(true)
+        setError('')
+        try {
+          await api('/review', { body: { ...skillSelector(data?.skill || selectedSkill), workspace, sessionId } })
+          setReviewRevision(value => value + 1)
+          onReviewed?.()
+        } catch (err) {
+          setError(actionMessage(err, t))
+          setReviewRevision(value => value + 1)
+        } finally {
+          setReviewing(false)
+        }
+      }
 
       const skill = data?.skill
       return h('div', { className: 'sd-overlay', onMouseDown: event => { if (event.target === event.currentTarget) onClose() } },
@@ -1239,9 +1460,10 @@ window.__ModuleLoader__.load({
             h('dt', null, t('scope')), h('dd', null, scopeLabel(skill.scope, t)),
             h('dt', null, t('installedAt')), h('dd', null, skill.installedAt ? new Date(skill.installedAt).toLocaleString() : '—'),
             h('dt', null, t('scanPath')), h('dd', null, skill.path ?? '—'),
-            h('dt', null, t('status')), h('dd', null, skill.status),
             h('dt', null, t('perm')), h('dd', { style: skill.permWarn ? { color: '#c9a96a' } : undefined }, skill.permLabel),
           ) : null,
+          skill ? h(AuditEvidence, { skill, t }) : null,
+          !sessionId ? h('div', { className: 'sd-hint', style: { marginTop: 8 } }, t('reviewSessionHint')) : null,
           data ? h('div', null,
             h('div', { className: 'sd-h4' }, t('fileTree')),
             h('div', { className: 'sd-tree' }, data.tree.map((item, index) => h('div', { key: index }, `${'  '.repeat(Math.max(0, item.depth))}${item.type === 'dir' ? '▸ ' : '· '}${item.path.split('/').pop()}${item.size !== undefined ? `  (${item.size} B)` : ''}`))),
@@ -1249,6 +1471,7 @@ window.__ModuleLoader__.load({
             h('pre', { className: 'sd-pre' }, data.preview),
           ) : null,
           h('div', { className: 'sd-modal-foot' },
+            h('button', { className: 'sd-btn', type: 'button', disabled: !sessionId || reviewing, onClick: review }, reviewing ? t('reviewing') : t('reviewAgain')),
             skill && skill.path ? h('button', { className: 'sd-btn', type: 'button', onClick: () => { onOpen(skill) } }, t('openFolder')) : null,
             skill && skill.path ? h('button', { className: 'sd-btn', type: 'button', onClick: () => { onToggle(skill); onClose() } }, skill.enabled ? t('disable') : t('enable')) : null,
             skill && skill.managed !== false ? h('button', { className: 'sd-btn danger', type: 'button', onClick: () => { onDelete(skill); onClose() } }, t('del')) : null,
@@ -1300,7 +1523,7 @@ window.__ModuleLoader__.load({
           await api('/restore-suppressed', { body: { need } })
           onSaved?.()
         } catch (err) {
-          setError(err.message)
+          setError(actionMessage(err, t))
         }
       }
 
@@ -1317,7 +1540,7 @@ window.__ModuleLoader__.load({
           onSaved()
           onClose()
         } catch (err) {
-          setError(err.message)
+          setError(actionMessage(err, t))
           onSaved?.()
         } finally {
           setSaving(false)
@@ -1411,7 +1634,7 @@ window.__ModuleLoader__.load({
             setError('')
           })
           .catch(err => {
-            if (alive) setError(err.message)
+            if (alive) setError(actionMessage(err, t))
           })
         return () => {
           alive = false
@@ -1438,7 +1661,7 @@ window.__ModuleLoader__.load({
             pushToast(t('noneLine'))
           }
         } catch (err) {
-          pushToast(err.message)
+          pushToast(actionMessage(err, t))
         } finally {
           setBusy(current => ({ ...current, [name]: false }))
         }
@@ -1508,7 +1731,7 @@ window.__ModuleLoader__.load({
           const result = await api('/learn', { body: { ...skillSelector(skill), workspace, sessionId, dryRun: true } })
           setAnalysis(result)
         } catch (err) {
-          setError(err.message)
+          setError(actionMessage(err, t))
         } finally {
           setLoading(false)
         }
@@ -1524,7 +1747,7 @@ window.__ModuleLoader__.load({
           setAnalysis(null)
           setSelected(null)
         } catch (err) {
-          pushToast(err.message)
+          pushToast(actionMessage(err, t))
         } finally {
           setBuilding(false)
         }
@@ -1540,7 +1763,7 @@ window.__ModuleLoader__.load({
           onInstalled?.()
           pushToast(t('learnAllDone', { n: result.learned, m: result.skipped }))
         } catch (err) {
-          pushToast(err.message)
+          pushToast(actionMessage(err, t))
         } finally {
           setBatchRunning(false)
         }
@@ -1609,9 +1832,8 @@ window.__ModuleLoader__.load({
                       h('span', { className: `sd-badge${peer.installed ? '' : ' grey'}` }, peer.installed ? t('installed') : peer.author),
                     ),
                     h('div', { className: 'meta' }, `${peer.installsLabel} · ${peer.permLabel}${peer.installed ? ' · 已安装' : ''}`),
-                    h('div', { className: 'sd-hint', style: { marginTop: 4 } }, [...peer.pros.map(x => `＋${x}`), ...peer.cons.map(x => `－${x}`)].join('  ')),
+                    h(DocumentChecks, { checks: peer.documentChecks, contentSource: peer.contentSource, t }),
                   ),
-                  h('span', { className: 'sd-score' }, `${t('matchScore')} ${peer.score}`),
                 ))),
               ),
               h('div', { className: 'sd-panel' },
@@ -1683,7 +1905,7 @@ window.__ModuleLoader__.load({
             setSkills(payload.skills)
             setError('')
           })
-          .catch(err => setError(err.message))
+          .catch(err => setError(actionMessage(err, t)))
       }, [workspace, sessionId])
 
       useEffect(() => {
@@ -1727,14 +1949,14 @@ window.__ModuleLoader__.load({
             const failedStep = Array.isArray(result.steps)
               ? [...result.steps].reverse().find(step => step.status === 'fail')
               : undefined
-            const message = failedStep?.detail ?? result.message ?? t('noneLine')
+            const message = result.code === 'protection-required' ? t('protectionRequired') : failedStep?.detail ?? result.message ?? t('noneLine')
             setFailures(current => ({ ...current, [skill.name]: message }))
             pushToast(`${skill.name} · ${message}`)
           }
         } catch (err) {
           setPhase(current => ({ ...current, [skill.name]: '' }))
-          setFailures(current => ({ ...current, [skill.name]: err.message }))
-          pushToast(err.message)
+          setFailures(current => ({ ...current, [skill.name]: actionMessage(err, t) }))
+          pushToast(actionMessage(err, t))
         } finally {
           setBusy(current => ({ ...current, [skill.name]: false }))
         }
@@ -1780,7 +2002,7 @@ window.__ModuleLoader__.load({
           setRemoteState('ok')
         } catch (err) {
           setRemoteSkills([])
-          setRemoteError(err.message)
+          setRemoteError(actionMessage(err, t))
           setRemoteState('error')
         }
       }
@@ -1805,7 +2027,7 @@ window.__ModuleLoader__.load({
             return
           }
           if (!result.ok) {
-            pushToast(result.message ?? result.error ?? t('noneLine'))
+            pushToast(result.code === 'protection-required' ? t('protectionRequired') : result.message ?? result.error ?? t('noneLine'))
             return
           }
           const shown = result.displayName || result.name
@@ -1814,7 +2036,7 @@ window.__ModuleLoader__.load({
           onInstalled?.()
           setRemoteSkills(current => current.filter(entry => entry.id !== item.id))
         } catch (err) {
-          pushToast(err.message)
+          pushToast(actionMessage(err, t))
         } finally {
           setRemoteBusy(current => ({ ...current, [item.id]: false }))
         }
@@ -1952,7 +2174,7 @@ window.__ModuleLoader__.load({
               /* ignore */
             }
           })
-          .catch(err => { if (requestId === loadRequest.current) setError(err.message) })
+          .catch(err => { if (requestId === loadRequest.current) setError(actionMessage(err, t)) })
       }, [currentSessionId])
 
       useEffect(() => {
@@ -1978,6 +2200,7 @@ window.__ModuleLoader__.load({
         !sessionId ? h('span', { className: 'sd-hint' }, t('reviewSessionHint')) : null,
       )
 
+      const protectionControls = h(ProtectionControls, { sessionId, protection: data?.protection, onChanged: load, t })
       const installed = useMemo(() => data?.installed ?? [], [data])
       const counts = useMemo(() => {
         const out = { plugin: 0, market: 0, learned: 0, scan: 0, user: 0 }
@@ -2034,7 +2257,7 @@ window.__ModuleLoader__.load({
           setOverlayStatus({ kind: 'ok', text: t('scanDone', { n: result.total ?? 0, m: result.added ?? 0 }) })
           load()
         } catch (err) {
-          setOverlayStatus({ kind: 'none', text: `${t('scanFailed')}${err.message}` })
+          setOverlayStatus({ kind: 'none', text: `${t('scanFailed')}${actionMessage(err, t)}` })
         } finally {
           setScanning(false)
           setTimeout(() => setOverlayStatus(null), 3200)
@@ -2046,7 +2269,7 @@ window.__ModuleLoader__.load({
           await api('/open', { body: { ...skillSelector(skill), workspace, sessionId } })
           pushToast(t('openFolder'))
         } catch (err) {
-          pushToast(err.message)
+          pushToast(actionMessage(err, t))
         }
       }
 
@@ -2058,7 +2281,7 @@ window.__ModuleLoader__.load({
           pushToast(skill.enabled ? t('toastDisabled', { name: skill.name }) : t('toastEnabled', { name: skill.name }))
           load()
         } catch (err) {
-          pushToast(err.message)
+          pushToast(actionMessage(err, t))
         } finally {
           setBusy(false)
         }
@@ -2074,7 +2297,7 @@ window.__ModuleLoader__.load({
               pushToast(t('deleted', { name: skill.name }))
               load()
             })
-            .catch(err => pushToast(err.message))
+            .catch(err => pushToast(actionMessage(err, t)))
         }
       }
 
@@ -2087,7 +2310,7 @@ window.__ModuleLoader__.load({
           setOverlayStatus({ kind: 'ok', text: t('replaceInstalled', { name: result.name }) })
           load()
         } catch (err) {
-          setOverlayStatus({ kind: 'none', text: err.message || t('replaceNone') })
+          setOverlayStatus({ kind: 'none', text: actionMessage(err, t) || t('replaceNone') })
         } finally {
           setReplacing('')
           setTimeout(() => setOverlayStatus(null), 1900)
@@ -2100,7 +2323,7 @@ window.__ModuleLoader__.load({
           pushToast(t('recordRemoved'))
           load()
         } catch (err) {
-          pushToast(err.message)
+          pushToast(actionMessage(err, t))
         }
       }
 
@@ -2122,7 +2345,7 @@ window.__ModuleLoader__.load({
         try {
           await api('/open-root', { body: { workspace } })
         } catch (err) {
-          pushToast(err.message)
+          pushToast(actionMessage(err, t))
         }
       }
 
@@ -2136,6 +2359,7 @@ window.__ModuleLoader__.load({
         return h('div', { className: 'sd-page' },
           h('style', { key: 'sd-css' }, CSS),
           sessionPicker,
+          protectionControls,
           h(MarketView, {
             t,
             workspace,
@@ -2152,6 +2376,7 @@ window.__ModuleLoader__.load({
         return h('div', { className: 'sd-page' },
           h('style', { key: 'sd-css' }, CSS),
           sessionPicker,
+          protectionControls,
           h(LearnView, {
             t,
             workspace,
@@ -2168,6 +2393,7 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'sd-page' },
         h('style', { key: 'sd-css' }, CSS),
         sessionPicker,
+        protectionControls,
         h('div', { className: 'sd-page-inner' },
           h('div', { className: 'sd-topbar' },
             h('span', { className: 'sd-title' }, t('panelTitle')),
@@ -2305,6 +2531,7 @@ window.__ModuleLoader__.load({
           onClose: () => setDetail(null),
           onOpen: openFolder,
           onToggle: toggle,
+          onReviewed: load,
           onDelete: skill => askDelete(skill, 'confirm'),
         }) : null,
         settingsOpen && data ? h(SettingsModal, {
@@ -2414,7 +2641,7 @@ window.__ModuleLoader__.load({
     return {
       inject,
       apply,
-      __test: { api, skillSelector, skillKey, sameWorkspaces, scopeChanges, installFailure, SettingsModal, DetectiveDock, ManagerPanel, DetailModal, MarketView, LearnView, ApiWarnings, zh, en },
+      __test: { api, skillSelector, skillKey, sameWorkspaces, scopeChanges, installFailure, actionMessage, auditView, AuditEvidence, DocumentChecks, ProtectionControls, Row, SettingsModal, DetectiveDock, ManagerPanel, DetailModal, MarketView, LearnView, ApiWarnings, zh, en },
     }
   },
 })
