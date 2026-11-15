@@ -102,6 +102,15 @@ function invokedNames(messages) {
   return [...names]
 }
 
+/** Shared boundary for the fixed host-owned repository operations. */
+export function validateWorkspaceTaskPath(input, context, options = {}) {
+  const target = canonicalPath(input, { cwd: context.cwd, missing: options.write === true, directory: options.directory === true })
+  if (!under(context.workspaceRoot, target)) throw failure('runtime-path-denied', '受控任务不能越出固定工作区')
+  if (sensitive(context.workspaceRoot, target) || (options.controlRoots || []).some(root => under(resolve(root), target))) throw failure('runtime-sensitive-path', '受控任务不能访问敏感路径或宿主控制面')
+  if (options.write && (context.mode !== 'workspace-write' || (options.readonlyRoots || []).some(root => under(root, target)))) throw failure('runtime-write-denied', '保存报告需要明确允许工作区写入，且不能修改技能资源')
+  return target
+}
+
 /** Old instructions cannot be reconstructed from current disk approval alone. */
 function assertFreshSkillHistory(session) {
   // DSH Session.seq is the next contiguous event offset (= private log.length),
@@ -196,17 +205,30 @@ export function attachRuntimePolicy(ctx, options = {}) {
           && definition.parameters.properties?.[field]?.type === 'string'
           && definition.parameters.required?.includes(field)) definitions.set(name, definition)
       }
+      if (options.fileTaskDefinition && toolService.get('dsh_file_task', context.agent) === options.fileTaskDefinition) definitions.set('dsh_file_task', options.fileTaskDefinition)
       if (!definitions.has('read') || !definitions.has('skill')) throw failure('runtime-policy-unavailable', '宿主缺少已核实的 read/skill 工具接口')
       state = { generation, context, mode: policy.mode, definitions, active: state?.active || new Map() }
       sessions.set(id, state)
     }
     if (!samePath(state.context.workspaceRoot, context.workspaceRoot) || state.context.identity !== context.identity) throw failure('runtime-workspace-changed', '保护工作区身份已变化，请关闭后重新确认')
     state.context = context
+    if (options.fileTaskDefinition && toolService.get('dsh_file_task', context.agent) === options.fileTaskDefinition) state.definitions.set('dsh_file_task', options.fileTaskDefinition)
     return state
   }
   function validate(exec, state) {
     const result = synchronous(validateActiveSkills, exec, [...state.active.values()], state.context)
     return result
+  }
+  function checkFileTask(exec) {
+    const id = exec.agent?.session?.id
+    if (!ready()) throw failure('runtime-policy-initializing', '正在恢复会话保护状态')
+    const state = stateFor(id, exec.agent)
+    if (!state) throw failure('runtime-protection-required', '请先为所选会话开启保护')
+    validate(exec, state)
+    if (exec.parent || exec.name !== 'dsh_file_task' || !options.fileTaskDefinition
+      || toolService.get(exec.name, exec.agent) !== options.fileTaskDefinition) throw failure('runtime-tool-denied', '受控任务工具身份不匹配')
+    if (typeof options.authorizeFileTask !== 'function') throw failure('runtime-tool-denied', '受控任务尚未配置')
+    return synchronous(options.authorizeFileTask, exec, [...state.active.values()], { ...state.context, mode: state.mode })
   }
   function authorize(exec, state, source, prepared) {
     if (typeof exec.arguments?.name !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(exec.arguments.name)) throw failure('runtime-skill-denied', '技能名不合法')
@@ -248,6 +270,7 @@ export function attachRuntimePolicy(ctx, options = {}) {
         authorize(exec, state, 'tool', preparedSkills.get(exec))
         return undefined
       }
+      if (exec.name === 'dsh_file_task') { checkFileTask(exec); return undefined }
       const spec = FILE_TOOLS[exec.name]
       if (!spec || Object.keys(args).some(key => !spec.fields.includes(key))) throw failure('runtime-tool-denied', '保护会话只允许已核实的文件工具')
       const target = canonicalPath(args.file_path, { cwd: state.context.cwd, missing: exec.name === 'write' })
@@ -340,6 +363,7 @@ export function attachRuntimePolicy(ctx, options = {}) {
       if (!current.protected) throw failure(current.available ? 'runtime-protection-required' : 'runtime-policy-unavailable', current.reason)
       return current
     },
+    checkFileTask,
     clearSession(sessionId) { sessions.delete(sessionId); lastDenied.delete(sessionId) },
     dispose() {
       if (disposed) return

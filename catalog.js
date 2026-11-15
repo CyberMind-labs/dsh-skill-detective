@@ -9,7 +9,10 @@
  * Bodies avoid inline backticks so they stay plain template strings; command
  * snippets use four-space indented blocks, which Markdown renders as code.
  */
+import { FILE_RECIPE_CATALOG } from './file-recipes.js'
+
 export const EXTRA_CATALOG = [
+  ...FILE_RECIPE_CATALOG,
   {
     name: 'markdown-writer',
     version: '1.3.0',

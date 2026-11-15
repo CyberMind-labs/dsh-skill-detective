@@ -1,0 +1,11 @@
+{
+  "files": ["README.md", "docs/plan.md", "package.json", "src/greet.js", "src/math.js"],
+  "directoryCount": 2,
+  "markers": [
+    {"path":"docs/plan.md","line":3,"marker":"TODO","text":"- TODO: add command-line usage documentation."},
+    {"path":"src/greet.js","line":2,"marker":"TODO","text":"// TODO: localize the greeting."},
+    {"path":"src/math.js","line":1,"marker":"FIXME","text":"// FIXME: document accepted numeric input."},
+    {"path":"src/math.js","line":6,"marker":"XXX","text":"// XXX: decide whether to reject non-finite values."}
+  ],
+  "javascriptChange": {"path":"src/greet.js","from":"name = 'World'","to":"name = 'Repository'"}
+}

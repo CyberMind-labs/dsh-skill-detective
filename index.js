@@ -28,6 +28,11 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { EXTRA_CATALOG } from './catalog.js'
 import { createProtectionService } from './protection-service.js'
 import { readSkillSnapshot, readSkillSnapshotSync, assessAuditEvidence, createAuditEvidence, carryControlledAudit, transformSkillFrontmatter, AUDIT_EVIDENCE_TTL } from './audit-evidence.js'
+import { buildRecipeFiles } from './file-recipes.js'
+import { analyzeSkillCompatibility, compatibilityDecision } from './skill-compatibility.js'
+import { createRepoTaskService } from './repo-task-service.js'
+import { createRecoveryService } from './recovery-service.js'
+import { createOnboardingService } from './onboarding-service.js'
 
 /* ------------------------------------------------------------------ */
 /* Remote skill sources                                                */
@@ -603,6 +608,11 @@ function buildSkillMarkdown(entry) {
   return lines.join('\n')
 }
 
+function filesForCatalogEntry(entry) {
+  return entry.recipeOperation ? buildRecipeFiles(entry.recipeOperation, entry.name)
+    : [{ path: 'SKILL.md', text: buildSkillMarkdown(entry) }]
+}
+
 function setFrontmatterBoolean(text, field, value) {
   const bool = value ? 'true' : 'false'
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)
@@ -837,7 +847,7 @@ class ModelJudge {
     const { system, user, maxTokens = 500, temperature = 0, timeoutMs = 15_000 } = options
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), Math.max(1_000, timeoutMs))
-    let text = ''
+    let text = '', finishKind = ''
     try {
       const request = {
         provider: route.provider,
@@ -856,6 +866,7 @@ class ModelJudge {
           text += chunk.text ?? ''
         } else if (chunk?.type === 'finish') {
           const kind = chunk.reason?.kind
+          finishKind = typeof kind === 'string' ? kind : ''
           if (kind === 'error') throw new Error(chunk.reason?.failure?.message ?? '模型调用失败')
           if (kind === 'aborted') throw new Error('模型调用超时')
         }
@@ -867,26 +878,31 @@ class ModelJudge {
     } finally {
       clearTimeout(timer)
     }
-    if (text.trim() === '') return { ok: false, error: '模型没有返回内容' }
-    return { ok: true, text, provider: route.provider, model: route.model }
+    if (text.trim() === '') return { ok: false, error: finishKind === 'max-tokens' ? '模型输出达到上限，尚未生成正文' : '模型没有返回内容',
+      ...(finishKind === 'max-tokens' ? { code: 'model-output-limit' } : {}), finishKind }
+    return { ok: true, text, provider: route.provider, model: route.model, finishKind }
   }
 
   async json(options) {
     const first = await this.call(options)
-    if (!first.ok) return first
-    const parsed = jsonFromText(first.text)
+    if (!first.ok && first.code !== 'model-output-limit') return first
+    const parsed = first.ok ? jsonFromText(first.text) : null
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
       return { ...first, data: parsed }
     }
     const retry = await this.call({
       ...options,
-      maxTokens: Math.min(1_200, (options.maxTokens ?? 500) + 250),
-      system: `${options.system}\n\n上一次输出不是合法 JSON。只输出一个 JSON 对象，不要代码围栏，不要任何其他字符。`,
+      // A reasoning-capable model can spend the entire small output allowance
+      // before producing text. Retry that explicit limit once, preserving the
+      // same model, session and reasoning configuration. Other call errors do
+      // not retry; ordinary malformed JSON keeps its existing smaller retry.
+      maxTokens: first.finishKind === 'max-tokens' ? 2_000 : Math.min(1_200, (options.maxTokens ?? 500) + 250),
+      system: `${options.system}\n\n${first.finishKind === 'max-tokens' ? '上一次输出达到长度上限，未取得完整 JSON。请简短作答。' : '上一次输出不是合法 JSON。'}只输出一个 JSON 对象，不要代码围栏，不要任何其他字符。`,
     })
     if (!retry.ok) return retry
     const retried = jsonFromText(retry.text)
     if (retried === null || typeof retried !== 'object' || Array.isArray(retried)) {
-      return { ok: false, error: '模型输出无法解析为 JSON' }
+      return { ok: false, error: '模型输出无法解析为 JSON', finishKind: retry.finishKind }
     }
     return { ...retry, data: retried }
   }
@@ -2375,7 +2391,9 @@ class SkillDetective {
         if (record.scope === 'workspace' && identityPath(record.workspace) !== ws) return record
         if (record.scope === 'temp' && (!sessionId || sessionDirectoryId(record.sessionId) !== sessionDirectoryId(sessionId))) return record
         const snapshot = record.path ? await readSkillSnapshot(record.path) : { ok: false, message: '内联技能没有可验证的完整目录' }
-        return (await this.persistAuditSnapshot(record, snapshot, policy)).record
+        const audited = (await this.persistAuditSnapshot(record, snapshot, policy)).record
+        return { ...audited, compatibility: snapshot.ok ? this.compatibilityForFiles(snapshot.files, sessionId)
+          : analyzeSkillCompatibility(null, this.compatibilityEnvironment(sessionId), { complete: false, basis: 'unverifiable' }) }
       }))
     }
     return records.filter(skill => {
@@ -2395,6 +2413,8 @@ class SkillDetective {
         return {
           ...skill,
           audit,
+          compatibility: options.freshAudit && skill.compatibility ? skill.compatibility
+            : analyzeSkillCompatibility(null, this.compatibilityEnvironment(sessionId), { complete: false, basis: 'metadata-only' }),
           displayName: meta?.displayName || skill.displayName || '',
           version: meta?.version ?? '0.1.0', origin,
           scope: skill.scope, managed: skill.managed !== false,
@@ -2823,7 +2843,8 @@ class SkillDetective {
       covered = enabled.find(item => item.name === suggested.name || item.name === `${suggested.name}-pro`) ?? null
     }
     const searchText = shortText(data.searchQuery, 160) || (suggested?.name ?? '')
-    const candidates = suggested === undefined ? [] : [decorateCandidate(suggested)]
+    const candidates = suggested === undefined ? [] : [{ ...decorateCandidate(suggested),
+      compatibility: this.compatibilityForFiles(filesForCatalogEntry(suggested), sessionId, { basis: 'catalog-template' }) }]
     const need = covered !== null ? null : suggested === undefined ? 'open' : `catalog:${suggested.name}`
     return {
       actionable: true,
@@ -2846,6 +2867,59 @@ class SkillDetective {
     }
   }
 
+  compatibilityEnvironment(sessionId) {
+    const protection = this.protection?.status(sessionId) || {}
+    let toolMode = null, operations = null
+    try {
+      const agent = this.ctx.get('agents')?.get?.(sessionId)
+      if (agent) toolMode = this.ctx.get('tools')?.modeFor?.(agent) || null
+    } catch { /* Missing host facts stay unknown. */ }
+    try { operations = this.repoTasks?.capabilities(sessionId)?.operations ?? null } catch { /* Unverified adapter stays unknown. */ }
+    return { protected: protection.protected === true, protectionMode: protection.mode || null,
+      tools: Array.isArray(protection.allowedTools) ? protection.allowedTools : [], toolMode,
+      recipeOperations: operations, platform: process.platform }
+  }
+
+  compatibilityForFiles(files, sessionId, options = {}) {
+    return analyzeSkillCompatibility(files, this.compatibilityEnvironment(sessionId), { complete: true, ...options })
+  }
+
+  compatibilityGate(compatibility, consent = false) {
+    // The exported test/service helper can exist without the host integration.
+    // In the live plugin apply() always attaches protection before any routes.
+    if (!this.protection) return { ok: true, compatibility }
+    return compatibilityDecision(compatibility, { consent, protected: compatibility.environment.protected })
+  }
+
+  destinationCompatibility(result, targetScope, owners, sessionId) {
+    const protection = this.protection?.status(sessionId)
+    const protectedWorkspace = protection?.workspaceRoot || protection?.workspace
+    if (this.protection && result.status !== 'blocked' && targetScope === 'workspace'
+      && (!protectedWorkspace || owners.some(owner => identityPath(owner) !== identityPath(protectedWorkspace)))) {
+      const reason = '目标工作区缺少已验证的所选保护会话；移动不代表目标会话已保护或执行兼容'
+      return { ...result, status: 'unknown', reason, summary: reason, reasons: [reason, ...(result.reasons || [])] }
+    }
+    return result
+  }
+
+  async inspectCompatibility(target, workspace, options = {}) {
+    const sessionId = options.sessionId || target?.sessionId || ''
+    if (target?.remoteId || target?.id) {
+      const resolved = await this.resolveRemote(target.remoteId || target.id)
+      if (!resolved.ok) return { ok: false, code: 'resolve-failed', message: resolved.error,
+        compatibility: analyzeSkillCompatibility(null, this.compatibilityEnvironment(sessionId), { complete: false, basis: 'metadata-only' }) }
+      return { ok: true, compatibility: this.compatibilityForFiles(resolved.files, sessionId), files: resolved.files.map(file => file.path) }
+    }
+    const name = typeof target === 'string' ? target : target?.name
+    const entry = BY_NAME.get(name)
+    if (entry && !target?.instanceId && !target?.path) return { ok: true, compatibility: this.compatibilityForFiles(filesForCatalogEntry(entry), sessionId, { basis: 'catalog-template' }) }
+    const record = await this.selectInstalled(target, workspace, { sessionId })
+    const snapshot = record.path ? await readSkillSnapshot(record.path) : { ok: false, message: '内联技能没有完整目录' }
+    const compatibility = snapshot.ok ? this.compatibilityForFiles(snapshot.files, sessionId)
+      : analyzeSkillCompatibility(null, this.compatibilityEnvironment(sessionId), { complete: false, basis: 'unverifiable' })
+    return { ok: true, compatibility }
+  }
+
   /** Curated market list with installed markers. */
   async market(workspace, options = {}) {
     const installed = await this.listInstalled(workspace, options)
@@ -2864,6 +2938,7 @@ class SkillDetective {
       permWarn: permLabel(entry.perm).warn,
       source: entry.source,
       installed: installedNames.has(entry.name),
+      compatibility: this.compatibilityForFiles(filesForCatalogEntry(entry), options.sessionId, { basis: 'catalog-template' }),
     }))
   }
 
@@ -2984,6 +3059,8 @@ class SkillDetective {
     }
 
     const merged = buildMergedSkill(source, sourceText, entry, peersWithText)
+    const mergedFiles = [{ path: 'SKILL.md', text: merged.markdown }]
+    const compatibility = this.compatibilityForFiles(mergedFiles, sourceName?.sessionId || options.sessionId)
     const peerSummary = peersWithText.map(peer => {
       const document = evaluateSkill(peer.entry, peer.text, peer.contentSource)
       return {
@@ -3000,6 +3077,7 @@ class SkillDetective {
         documentChecks: document.checks,
         contentSource: document.basis,
         effectValidation: document.effectValidation,
+        compatibility: analyzeSkillCompatibility(null, this.compatibilityEnvironment(sourceName?.sessionId || options.sessionId), { complete: false, basis: peer.contentSource }),
       }
     })
 
@@ -3008,18 +3086,22 @@ class SkillDetective {
         ok: options.dryRun === true,
         dryRun: options.dryRun === true,
         previewOnly: true,
+        compatibility,
         code: 'unsupported-learning-assets',
         message: '来源含配套文件或目录，当前仅可预览文档整合；请手工保留这些来源的完整目录及脚本/资源引用，未生成或启用新技能。',
         preserveSources,
         source: { name: source.name, version: source.version, author: entry?.author ?? '', category },
         peers: peerSummary,
-        merged: options.dryRun === true ? { name: merged.name, authors: merged.authors, sources: merged.sources, markdown: merged.markdown, bytes: merged.markdown.length } : undefined,
+        merged: options.dryRun === true ? { name: merged.name, authors: merged.authors, sources: merged.sources, markdown: merged.markdown, bytes: merged.markdown.length, compatibility } : undefined,
         audit: { available: false, poison: false, findings: [], error: 'unsupported-learning-assets' },
       }
     }
 
+    const gate = this.compatibilityGate(compatibility, options.compatibilityConsent)
+    if (options.dryRun !== true && !gate.ok) return { ...gate, source: { name: source.name }, peers: peerSummary,
+      candidate: { name: merged.name, scope: source.scope }, merged: { name: merged.name, markdown: merged.markdown, compatibility } }
     const verdict = await this.reviewFiles(
-      [{ path: 'SKILL.md', text: merged.markdown }],
+      mergedFiles,
       { name: merged.name, source: 'local/learned', sessionId: sourceName?.sessionId || options.sessionId },
     )
 
@@ -3027,9 +3109,10 @@ class SkillDetective {
       return {
         ok: true,
         dryRun: true,
+        compatibility,
         source: { name: source.name, version: source.version, author: entry?.author ?? '', category },
         peers: peerSummary,
-        merged: { name: merged.name, authors: merged.authors, sources: merged.sources, markdown: merged.markdown, bytes: merged.markdown.length },
+        merged: { name: merged.name, authors: merged.authors, sources: merged.sources, markdown: merged.markdown, bytes: merged.markdown.length, compatibility },
         audit: {
           available: verdict.ok === true,
           poison: verdict.ok === true ? verdict.poison : false,
@@ -3053,7 +3136,7 @@ class SkillDetective {
     }
 
     const scope = ['global', 'workspace', 'temp'].includes(source.scope) ? source.scope : 'workspace'
-    const result = await this.installPrepared({ name: merged.name, files: [{ path: 'SKILL.md', text: merged.markdown }], scope, workspace: source.workspace || workspace, sessionId: sourceName?.sessionId || options.sessionId || '', conflict: options.conflict || '', verdict, sourceKind: 'learned', meta: { origin: 'learned', installs: entry?.installs || 0, author: merged.authors.join(', '), version: source.version, category: merged.category, perm: merged.perm, source: 'local/learned', description: merged.description, learnedFrom: merged.sources } })
+    const result = await this.installPrepared({ name: merged.name, files: mergedFiles, scope, workspace: source.workspace || workspace, sessionId: sourceName?.sessionId || options.sessionId || '', conflict: options.conflict || '', verdict, sourceKind: 'learned', compatibilityConsent: options.compatibilityConsent, meta: { origin: 'learned', installs: entry?.installs || 0, author: merged.authors.join(', '), version: source.version, category: merged.category, perm: merged.perm, source: 'local/learned', description: merged.description, learnedFrom: merged.sources } })
     return { ...result, authors: merged.authors, sources: merged.sources, peers: peerSummary, merged: { name: result.name || merged.name, authors: merged.authors, markdown: merged.markdown } }
   }
 
@@ -3072,6 +3155,8 @@ class SkillDetective {
           code: result.code ?? null,
           target: result.name ?? null,
           message: result.message ?? null,
+          compatibility: result.compatibility ?? null,
+          candidate: result.candidate ?? null,
         })
       } catch (error) {
         results.push({
@@ -3094,7 +3179,7 @@ class SkillDetective {
    * curated catalog answers and the result records which source was used, so the
    * panel never claims a remote hit it did not receive.
    */
-  async search(query, workspace) {
+  async search(query, workspace, options = {}) {
     const text = String(query ?? '').trim()
     let remote = null
     let remoteError = null
@@ -3114,7 +3199,7 @@ class SkillDetective {
       }
     }
 
-    const installed = await this.listInstalled(workspace)
+    const installed = await this.listInstalled(workspace, options)
     const installedNames = new Set(installed.filter(item => item.enabled).map(item => item.name))
     // Marketplace search is a plain text filter, not the per-message trigger:
     // matching a catalogue name here must never involve a model call.
@@ -3140,6 +3225,7 @@ class SkillDetective {
         permWarn: permLabel(entry.perm).warn,
         source: entry.source,
         installed: installedNames.has(entry.name),
+        compatibility: this.compatibilityForFiles(filesForCatalogEntry(entry), options.sessionId, { basis: 'catalog-template' }),
       }))
       .sort((a, b) => b.installs - a.installs)
     return {
@@ -3176,6 +3262,7 @@ class SkillDetective {
         source: `skills.sh/${skillName}`,
         installed: false,
         remote: true,
+        compatibility: analyzeSkillCompatibility(null, {}, { complete: false, basis: 'metadata-only' }),
         rank: index,
       }
     }).filter(Boolean)
@@ -3204,7 +3291,7 @@ class SkillDetective {
   }
 
   /** Full online catalog for the marketplace: keeps repo/id so an item can be installed. */
-  async remoteCatalog(query) {
+  async remoteCatalog(query, options = {}) {
     const text = String(query ?? '').trim()
     if (text === '') return { ok: true, source: 'skills.sh', skills: [] }
     const result = await this.fetchSkillsShRows(text)
@@ -3225,6 +3312,7 @@ class SkillDetective {
         installs: Number.isFinite(installs) ? installs : 0,
         installsLabel: `${humanCount(Number.isFinite(installs) ? installs : 0)} 安装`,
         repoUrl: owner !== '' && repo !== '' ? `https://github.com/${owner}/${repo}` : '',
+        compatibility: analyzeSkillCompatibility(null, this.compatibilityEnvironment(options.sessionId), { complete: false, basis: 'metadata-only' }),
       }
     }).filter(item => item.id !== '' && item.skillId !== '')
     return { ok: true, source: 'skills.sh', skills }
@@ -3469,9 +3557,12 @@ class SkillDetective {
     this.tempRegistrations.delete(instanceId)
   }
 
-  async installPrepared({ name: baseName, displayName = '', files, scope, workspace, sessionId = '', conflict = '', selector = {}, meta = {}, verdict, sourceKind = 'catalog' }) {
+  async installPrepared({ name: baseName, displayName = '', files, scope, workspace, sessionId = '', conflict = '', selector = {}, meta = {}, verdict, sourceKind = 'catalog', compatibilityConsent = false }) {
     return this.mutateSkills(async () => {
       const warnings = []
+      let compatibility = this.compatibilityForFiles(files, sessionId)
+      const initialGate = this.compatibilityGate(compatibility, compatibilityConsent)
+      if (!initialGate.ok) return { ...initialGate, candidate: { name: baseName, scope } }
       if (scope === 'temp' && !this.validSessionId(sessionId)) return { ok: false, code: 'session-unavailable', error: 'session-unavailable', message: '临时技能需要一个有效的当前会话' }
       const root = await this.targetRoot(scope, workspace, sessionId)
       const taken = new Set()
@@ -3509,6 +3600,9 @@ class SkillDetective {
           const fullReview = await this.reviewFiles(snapshot.files, { name, source: meta.source || sourceKind, sessionId, contentHash: snapshot.contentHash })
           const policy = await this.auditPolicy()
           const checked = await readSkillSnapshot(stage)
+          compatibility = this.compatibilityForFiles(checked.ok ? checked.files : null, sessionId, { complete: checked.ok })
+          const gate = this.compatibilityGate(compatibility, compatibilityConsent)
+          if (!gate.ok) throw Object.assign(skillError(gate.code, gate.message), { compatibility })
           auditEvidence = createAuditEvidence(snapshot, fullReview, { ...policy, policyVersion: fullReview.policyVersion, promptHash: fullReview.promptHash, reviewedAt: fullReview.at || Date.now(), expiresAt: (fullReview.at || Date.now()) + AUDIT_EVIDENCE_TTL })
           const audit = this.auditForSnapshot(record, checked, policy, auditEvidence)
           if (audit.status !== 'current') throw skillError(audit.status === 'changed' ? 'audit-content-changed' : 'audit-rejected', audit.reason || fullReview.error || '完整目录审查未通过')
@@ -3534,11 +3628,11 @@ class SkillDetective {
         if (registered && oldRegistration) await this.cleanupCommitted(() => this.restoreTempRegistration(oldRegistration), '旧临时注册恢复', warnings)
         this.state.data.installs = oldState; this.index.data.skills = oldIndex
         try { await this.state.save(); await this.index.save() } catch (rollbackError) { this.log(`skill-detective: rollback state persistence failed: ${rollbackError.message}`) }
-        return { ok: false, code: error.code || 'write-failed', error: error.code || 'write-failed', message: error.message }
+        return { ok: false, code: error.code || 'write-failed', error: error.code || 'write-failed', message: error.message, compatibility: error.compatibility || compatibility, candidate: { name: baseName, scope } }
       }
       if (oldRegistration) await this.cleanupCommitted(() => oldRegistration.dispose?.(), '旧临时注册释放', warnings)
       await this.cleanupCommitted(() => this.ctx.emit?.('skills/change'), '通知技能变更', warnings)
-      return { ok: true, name, instanceId: record.instanceId, path: dir, displayName, scope, sessionId: record.sessionId, renamedFrom: name === baseName ? '' : baseName, bytes: record.bytes, bytesLabel: humanBytes(record.bytes), warnings, audit: { verdict: verdict.verdict, severity: verdict.severity, summary: verdict.summary } }
+      return { ok: true, name, instanceId: record.instanceId, path: dir, displayName, scope, sessionId: record.sessionId, renamedFrom: name === baseName ? '' : baseName, bytes: record.bytes, bytesLabel: humanBytes(record.bytes), warnings, compatibility, restrictedTrial: compatibility.status === 'unknown', audit: { verdict: verdict.verdict, severity: verdict.severity, summary: verdict.summary } }
     })
   }
 
@@ -3549,13 +3643,16 @@ class SkillDetective {
     if (scope === 'temp' && !this.validSessionId(options.sessionId)) return { ok: false, code: 'session-unavailable', message: '临时技能需要一个有效的当前会话' }
     const resolved = await this.resolveRemote(id)
     if (!resolved.ok) return { ok: false, code: 'resolve-failed', message: resolved.error }
+    const compatibility = this.compatibilityForFiles(resolved.files, options.sessionId)
+    const gate = this.compatibilityGate(compatibility, options.compatibilityConsent)
+    if (!gate.ok) return { ...gate, candidate: { remoteId: id, name: requestedName || String(id).split('/')[2], scope }, scope }
     const verdict = await this.reviewFiles(resolved.files, { name: requestedName || id, source: resolved.repo, sessionId: options.sessionId })
     if (!verdict.ok) return { ok: false, code: verdict.error === 'session-unavailable' ? 'session-unavailable' : 'audit-unavailable', message: verdict.error === 'session-unavailable' ? '请选择一个有效会话用于安全审查' : `安全审查不可用：${verdict.error}` }
     if (verdict.poison) return { ok: false, code: 'poison', message: '下载内容未通过安全审查', findings: verdict.findings, verdict: verdict.verdict }
     const fallback = String(id).split('/')[2] || 'remote-skill'
     const chosen = chooseSkillName(typeof requestedName === 'string' && requestedName.trim() ? requestedName.trim() : fallback, fallback, verdict.slug)
     if (!chosen.name) return { ok: false, code: 'invalid-name', message: '技能名不合法' }
-    const result = await this.installPrepared({ ...chosen, files: resolved.files, scope, workspace: ws, sessionId: options.sessionId || '', conflict: options.conflict, selector: options, verdict, sourceKind: 'remote', meta: { origin: 'market', installs: 0, author: '', version: '1.0.0', category: '', perm: 'unknown', source: `skills.sh/${id}`, description: verdict.summary, remoteId: id, remoteRepo: resolved.repo, remotePath: resolved.path, auditFindings: verdict.findings.length } })
+    const result = await this.installPrepared({ ...chosen, files: resolved.files, scope, workspace: ws, sessionId: options.sessionId || '', conflict: options.conflict, selector: options, verdict, sourceKind: 'remote', compatibilityConsent: options.compatibilityConsent, meta: { origin: 'market', installs: 0, author: '', version: '1.0.0', category: '', perm: 'unknown', source: `skills.sh/${id}`, description: verdict.summary, remoteId: id, remoteRepo: resolved.repo, remotePath: resolved.path, auditFindings: verdict.findings.length } })
     return { ...result, repo: resolved.repo, remotePath: resolved.path, source: resolved.source, files: resolved.files.map(item => item.path), findings: verdict.findings }
   }
 
@@ -3579,10 +3676,10 @@ class SkillDetective {
   }
 
   /** Install the top skills.sh hit for a need that has no bundled candidate. */
-  async installFromRemote(searchText, step, targetScope, ws, sessionId) {
+  async installFromRemote(searchText, step, targetScope, ws, sessionId, options = {}) {
     const text = String(searchText ?? '').trim()
     if (text === '') return null
-    const result = await this.remoteCatalog(text)
+    const result = await this.remoteCatalog(text, { sessionId })
     if (!result.ok || result.skills.length === 0) {
       step('search', '检索 skills.sh', 'fail', result.error ?? '没有远程候选')
       return null
@@ -3601,10 +3698,11 @@ class SkillDetective {
       scope: targetScope,
       sessionId,
       conflict: 'rename',
+      compatibilityConsent: options.compatibilityConsent,
     })
     if (!installed.ok) {
       step(`audit-${best.name}`, '安全审查 / 下载', 'fail', installed.message ?? '远程安装失败')
-      return null
+      return installed
     }
     step('audit', '安全审查', 'ok', `大模型审查通过（${installed.audit?.severity ?? 'low'}）`)
     step('download', '下载', 'ok', `${installed.path}（${installed.bytesLabel}）`)
@@ -3612,7 +3710,7 @@ class SkillDetective {
     return installed
   }
 
-  async install({ name, need, origin, scope, sessionId = '', workspace, text, conflict, instanceId, path }) {
+  async install({ name, need, origin, scope, sessionId = '', workspace, text, conflict, instanceId, path, compatibilityConsent = false }) {
     const state = await this.state.load()
     const targetScope = ['global', 'workspace', 'temp'].includes(scope) ? scope : state.settings.defaultScope
     const ws = this.normalizeWorkspace(workspace || this.sessionWorkspaces.get(String(sessionId)) || '')
@@ -3621,19 +3719,22 @@ class SkillDetective {
     if (need === 'open') {
       const query = String(text || '').trim()
       if (!query) return { ok: false, steps, error: 'no-need' }
-      const remote = await this.installFromRemote(query, step, targetScope, ws, sessionId)
-      return remote ? { ...remote, steps, remote: true } : { ok: false, steps, error: 'none-found' }
+      const remote = await this.installFromRemote(query, step, targetScope, ws, sessionId, { compatibilityConsent })
+      return remote ? { ...remote, steps, remote: true, need, text } : { ok: false, steps, error: 'none-found' }
     }
     const requested = typeof name === 'string' && name ? name : String(need || '').startsWith('catalog:') ? need.slice(8) : ''
     const candidate = BY_NAME.get(requested)
     if (!candidate) return { ok: false, steps, error: requested ? 'unknown-skill' : 'no-need' }
     step('analyze', '语义分析', 'ok', `目标技能 ${candidate.name}`)
-    const files = [{ path: 'SKILL.md', text: buildSkillMarkdown(candidate) }]
+    const files = filesForCatalogEntry(candidate)
+    const compatibility = this.compatibilityForFiles(files, sessionId, { basis: 'catalog-template' })
+    const gate = this.compatibilityGate(compatibility, compatibilityConsent)
+    if (!gate.ok) return { ...gate, steps, candidate: { name: candidate.name, scope: targetScope }, need, text, scope: targetScope }
     const verdict = await this.reviewFiles(files, { name: candidate.name, source: candidate.source, sessionId })
     if (!verdict.ok) return { ok: false, steps, code: verdict.error === 'session-unavailable' ? 'session-unavailable' : 'audit-unavailable', error: verdict.error === 'session-unavailable' ? 'session-unavailable' : 'audit-unavailable', message: verdict.error === 'session-unavailable' ? '请选择一个有效会话用于安全审查' : verdict.error }
     if (verdict.poison) return { ok: false, steps, error: 'all-poisoned', findings: verdict.findings }
     step('audit', '安全审查', 'ok', `大模型审查通过（${verdict.severity}）`)
-    const result = await this.installPrepared({ name: candidate.name, files, scope: targetScope, workspace: ws, sessionId, conflict, selector: { instanceId, path }, verdict, meta: { origin: origin === 'market' ? 'market' : 'plugin', installs: candidate.installs, author: candidate.author, version: candidate.version, category: candidate.category, perm: candidate.perm, source: candidate.source, description: candidate.description, whenToUse: candidate.whenToUse } })
+    const result = await this.installPrepared({ name: candidate.name, files, scope: targetScope, workspace: ws, sessionId, conflict, selector: { instanceId, path }, verdict, compatibilityConsent, meta: { origin: origin === 'market' ? 'market' : 'plugin', installs: candidate.installs, author: candidate.author, version: candidate.version, category: candidate.category, perm: candidate.perm, source: candidate.source, description: candidate.description, whenToUse: candidate.whenToUse } })
     if (result.ok) {
       step('download', '下载', 'ok', `写入 ${result.path}（${result.bytesLabel}）`)
       step('enable', '装载启用', 'ok', `${result.displayName || result.name} 已装载`)
@@ -3730,7 +3831,7 @@ class SkillDetective {
     })
   }
 
-  async moveSkill(selector, targetScope, workspaces, workspace, sessionId) {
+  async moveSkill(selector, targetScope, workspaces, workspace, sessionId, options = {}) {
     return this.mutateSkills(async () => {
       const warnings = []
       const current = await this.selectInstalled(selector, workspace, { sessionId })
@@ -3741,6 +3842,13 @@ class SkillDetective {
       if (targetScope === 'temp' && !this.validSessionId(sessionId)) throw skillError('session-unavailable', '临时技能需要一个有效的当前会话')
       const ws = this.normalizeWorkspace(workspace || '')
       const owners = targetScope === 'workspace' ? [...new Set((workspaces?.length ? workspaces : [ws]).map(dir => this.normalizeWorkspace(dir)))] : [ws]
+      const assessMove = files => {
+        const result = this.destinationCompatibility(this.compatibilityForFiles(files, sessionId), targetScope, owners, sessionId)
+        const gate = this.compatibilityGate(result, options.compatibilityConsent)
+        if (!gate.ok) throw Object.assign(skillError(gate.code, gate.message), { compatibility: result })
+        return result
+      }
+      let compatibility = assessMove(verified.snapshot.files)
       const roots = await Promise.all(owners.map(owner => this.targetRoot(targetScope, owner, sessionId)))
       const destinations = roots.map((root, i) => ({ root, path: join(root, current.name), workspace: targetScope === 'workspace' ? resolve(owners[i]) : null }))
       for (const dest of destinations) {
@@ -3753,7 +3861,7 @@ class SkillDetective {
           const markdown = await readFile(join(current.path, 'SKILL.md'), 'utf8')
           if (!await this.registerTempFor(sessionId, { name: current.name, description: current.description, content: bodyOf(markdown), whenToUse: current.whenToUse, instanceId: current.instanceId })) throw skillError('temp-registration-failed', '临时技能注册失败')
         }
-        return { ok: true, name: current.name, scope: current.scope, instanceId: current.instanceId, instances: [{ instanceId: current.instanceId, path: current.path, workspace: current.workspace, sessionId: current.sessionId }] }
+        return { ok: true, name: current.name, scope: current.scope, instanceId: current.instanceId, compatibility, instances: [{ instanceId: current.instanceId, path: current.path, workspace: current.workspace, sessionId: current.sessionId }] }
       }
       const state = await this.state.load(), index = await this.index.load()
       const oldState = structuredClone(state.installs), oldIndex = structuredClone(index.skills)
@@ -3780,6 +3888,7 @@ class SkillDetective {
           const copied = await readSkillSnapshot(record.path)
           const audit = this.auditForSnapshot(record, copied, await this.auditPolicy(), verified.evidence)
           if (audit.status !== 'current') throw skillError('audit-content-changed', '移动期间目录变化或审查失效')
+          compatibility = assessMove(copied.files)
           Object.assign(record, { contentHash: copied.contentHash, auditEvidence: verified.evidence, audit, snapshotCheckedAt: audit.checkedAt })
         }
         if (targetScope === 'temp' && current.enabled) {
@@ -3815,7 +3924,7 @@ class SkillDetective {
         for (const stage of staged) await this.cleanupCommitted(() => rm(stage, { recursive: true, force: true }), '移动暂存目录清理', warnings)
       }
       await this.cleanupCommitted(() => this.ctx.emit?.('skills/change'), '通知技能变更', warnings)
-      return { ok: true, name: current.name, scope: targetScope, instanceId: records[0].instanceId, warnings, instances: records.map(record => ({ instanceId: record.instanceId, path: record.path, workspace: record.workspace, sessionId: record.sessionId })) }
+      return { ok: true, name: current.name, scope: targetScope, instanceId: records[0].instanceId, warnings, compatibility, instances: records.map(record => ({ instanceId: record.instanceId, path: record.path, workspace: record.workspace, sessionId: record.sessionId })) }
     })
   }
 
@@ -3835,6 +3944,11 @@ class SkillDetective {
       const text = before.ok ? before.files.find(file => file.path === 'SKILL.md').text : await readFile(join(target.path, 'SKILL.md'), 'utf8')
       const operation = { type: 'toggle', enabled }, next = transformSkillFrontmatter(text, operation)
       const sessionId = typeof selector === 'object' ? selector.sessionId || options.sessionId || '' : options.sessionId || ''
+      let compatibility = enabled ? this.compatibilityForFiles(before.ok ? before.files : null, sessionId, { complete: before.ok }) : null
+      if (enabled) {
+        const gate = this.compatibilityGate(compatibility, options.compatibilityConsent)
+        if (!gate.ok) throw Object.assign(skillError(gate.code, gate.message), { compatibility })
+      }
       if (target.scope === 'temp' && enabled && !this.validSessionId(sessionId)) throw skillError('session-unavailable', '临时技能需要一个有效的当前会话')
       const oldRegistration = this.tempRegistrations.get(target.instanceId)
       const oldState = structuredClone(this.state.data.installs), oldIndex = structuredClone(this.index.data.skills)
@@ -3842,6 +3956,11 @@ class SkillDetective {
       try {
         await this.atomicPublish(target.path, [{ path: 'SKILL.md', text: next }], { copyFrom: target.path, overwrite: true, warnings, validateStage: async stage => {
           staged = await readSkillSnapshot(stage)
+          if (enabled) {
+            compatibility = this.compatibilityForFiles(staged.ok ? staged.files : null, sessionId, { complete: staged.ok })
+            const gate = this.compatibilityGate(compatibility, options.compatibilityConsent)
+            if (!gate.ok) throw Object.assign(skillError(gate.code, gate.message), { compatibility })
+          }
           if (beforeAudit.status === 'current') {
             const carried = carryControlledAudit(oldEvidence, before, staged, operation, policy)
             if (!carried.ok) throw skillError('audit-revalidation-required', carried.audit.reason)
@@ -3868,7 +3987,7 @@ class SkillDetective {
         else if (oldRegistration) await this.cleanupCommitted(() => oldRegistration.dispose?.(), '旧临时注册释放', warnings)
       }
       await this.cleanupCommitted(() => this.ctx.emit?.('skills/change'), '通知技能变更', warnings)
-      return { ok: true, name: target.name, instanceId: target.instanceId, enabled, audit: this.index.data.skills[target.instanceId].audit, warnings }
+      return { ok: true, name: target.name, instanceId: target.instanceId, enabled, audit: this.index.data.skills[target.instanceId].audit, compatibility, warnings }
     })
   }
 
@@ -3949,8 +4068,8 @@ class SkillDetective {
     const peers = CATALOG.filter(item => isReplacementSkill(currentEntry, item) && !installedNames.has(item.name)).sort((a, b) => b.installs - a.installs)
     if (!peers.length) return { ok: false, code: 'no-peers', message: '未找到同类技能' }
     const best = peers[0]
-    const result = await this.install({ name: best.name, origin: 'market', workspace: ws, scope: current?.scope || record?.scope || undefined, sessionId: selection.sessionId || options.sessionId || '' })
-    return result.ok ? { ...result, installsLabel: humanCount(best.installs), description: best.description } : { ok: false, code: 'install-failed', message: '同类技能安装失败', detail: result }
+    const result = await this.install({ name: best.name, origin: 'market', workspace: ws, scope: current?.scope || record?.scope || undefined, sessionId: selection.sessionId || options.sessionId || '', compatibilityConsent: options.compatibilityConsent })
+    return result.ok ? { ...result, installsLabel: humanCount(best.installs), description: best.description } : { ...result, ok: false, code: result.code || 'install-failed', message: result.message || '同类技能安装失败', detail: result }
   }
 
   async detail(selector, workspace, options = {}) {
@@ -4169,8 +4288,8 @@ function sendJson(res, status, payload) {
   res.end(body)
 }
 
-function fail(res, status, code, message) {
-  sendJson(res, status, { ok: false, error: { code, message } })
+function fail(res, status, code, message, details = {}) {
+  sendJson(res, status, { ok: false, error: { code, message }, ...details })
 }
 
 async function readJsonBody(req, limit = 512 * 1024) {
@@ -4214,13 +4333,16 @@ function skillSelector(input = {}) {
 
 function sessionChoices(service, state, requestedId = '') {
   const ids = new Set([requestedId, service.currentSessionId, ...Object.keys(state.sessions ?? {}), ...service.sessions.keys()])
+  try { for (const agent of service.ctx.get('agents')?.list?.() || []) ids.add(typeof agent === 'string' ? agent : agent.id) } catch { /* optional live inventory */ }
   const choices = []
   for (const id of ids) {
     if (!service.validSessionId(id)) continue
     let agent
     try { agent = service.ctx.get('agents')?.get?.(id) } catch { continue }
     const title = agent?.session?.header?.title ?? agent?.header?.title ?? agent?.title
-    choices.push({ id, title: typeof title === 'string' && title.trim() !== '' ? title.trim() : `会话 ${id.slice(0, 8)}` })
+    const cwd = agent?.session?.header?.cwd
+    const workspaceTitle = typeof cwd === 'string' ? service.workspaceList().find(item => identityPath(item.path) === identityPath(cwd))?.title || basename(cwd) : ''
+    choices.push({ id, title: `${typeof title === 'string' && title.trim() !== '' ? title.trim() : workspaceTitle || '会话'} · ${id.slice(-8)}` })
   }
   return choices
 }
@@ -4265,6 +4387,7 @@ function openInFileManager(path) {
 
 export function apply(ctx) {
   const service = new SkillDetective(ctx)
+  service.repoTasks = createRepoTaskService(service)
   service.protection = createProtectionService(service, ctx, {
     store: new JsonStore(join(DSH_HOME, 'skill-detective', 'runtime-protection.json')),
     promptFile: join(PROMPT_DIR, 'security-audit.md'),
@@ -4273,8 +4396,30 @@ export function apply(ctx) {
     controlRoots: [...new Set([DSH_HOME, PLUGIN_DIR, dirname(process.execPath)])],
   })
   ctx.effect(() => () => service.protection.dispose(), 'skill-detective: execution protection cleanup')
+  ctx.effect(() => () => service.repoTasks.dispose(), 'skill-detective: repository tools cleanup')
+  service.recovery = createRecoveryService({
+    targets: {
+      protection: { file: join(DSH_HOME, 'skill-detective', 'runtime-protection.json'), label: '运行保护状态' },
+      state: { file: service.state.file, label: '技能管理状态' },
+      index: { file: INDEX_FILE, label: '技能索引' },
+      'audit-cache': { file: AUDIT_CACHE_FILE, label: '审查缓存' },
+    },
+    withFileLock: serializedStoreUpdate,
+    afterRestore: async target => service.mutateSkills(async () => {
+      // Invalidate every dependent in-memory view before checking protection.
+      service.state.data = null; service.index.data = null; service.auditCache.data = null
+      service.judge.reset()
+      if (target === 'state') {
+        for (const id of [...service.tempRegistrations.keys()]) await service.releaseTemp(id)
+      }
+      await service.protection.reload()
+      if (target === 'index') await service.scanOnce('recovery')
+    }),
+  })
+  service.onboarding = createOnboardingService(service, { sessionChoices })
 
   ctx.effect(() => ctx.on('agent/created', async ({ agent }) => {
+    service.repoTasks.attach(agent)
     try { await service.restoreTempFor(agent.id) }
     catch (error) { service.log('skill-detective: temp restore failed: ' + error.message) }
   }), 'skill-detective: restore temporary skills on agent creation')
@@ -4284,6 +4429,7 @@ export function apply(ctx) {
       const agents = ctx.get('agents')?.list?.() ?? []
       for (const agent of agents) {
         if (cancelled) break
+        service.repoTasks.attach(agent)
         await service.restoreTempFor(agent.id)
       }
     }).catch(error => service.log('skill-detective: live temp restore failed: ' + error.message))
@@ -4357,6 +4503,9 @@ export function apply(ctx) {
         const method = req.method ?? 'GET'
 
         try {
+          if (method === 'GET' && route === '/preflight') {
+            return sendJson(res, 200, await service.onboarding.preflight(Object.fromEntries(url.searchParams)))
+          }
           if (method === 'GET' && route === '/state') {
             const workspace = service.normalizeWorkspace(url.searchParams.get('workspace') ?? '')
             const sessionId = service.validSessionId(url.searchParams.get('sessionId') ?? '')
@@ -4467,6 +4616,20 @@ export function apply(ctx) {
 
           const body = await readJsonBody(req)
 
+          if (route === '/recovery/preview') return sendJson(res, 200, await service.recovery.preview(String(body.target ?? '')))
+          if (route === '/recovery/restore') return sendJson(res, 200, await service.recovery.restore(String(body.target ?? ''), String(body.previewToken ?? '')))
+          if (route === '/compatibility') {
+            const workspace = service.normalizeWorkspace(body.workspace ?? '')
+            const sessionId = String(body.sessionId ?? '')
+            const result = await service.inspectCompatibility(body, workspace, { sessionId })
+            if (result.compatibility && body.targetScope !== undefined) {
+              if (!['workspace', 'global', 'temp'].includes(body.targetScope)) throw requestError(400, 'bad-scope', '未知目标作用域')
+              const owners = Array.isArray(body.targetWorkspaces) && body.targetWorkspaces.length ? body.targetWorkspaces.map(path => service.normalizeWorkspace(path)) : [workspace]
+              result.compatibility = service.destinationCompatibility(result.compatibility, body.targetScope, owners, sessionId)
+            }
+            return sendJson(res, 200, result)
+          }
+
           if (route === '/protection') {
             if (typeof body.enabled !== 'boolean' || !['read-only', 'workspace-write'].includes(body.mode)) {
               throw requestError(400, 'invalid-protection', '保护状态必须为布尔值，模式必须为只读或工作区写入')
@@ -4504,7 +4667,7 @@ export function apply(ctx) {
             return sendJson(res, 200, await service.replace(
               selector,
               service.normalizeWorkspace(body.workspace ?? ''),
-              { sessionId: selector.sessionId },
+              { sessionId: selector.sessionId, compatibilityConsent: body.compatibilityConsent === true },
             ))
           }
 
@@ -4514,11 +4677,11 @@ export function apply(ctx) {
 
           if (route === '/search') {
             const workspace = service.normalizeWorkspace(body.workspace ?? '')
-            return sendJson(res, 200, { ok: true, ...await service.search(String(body.query ?? ''), workspace) })
+            return sendJson(res, 200, { ok: true, ...await service.search(String(body.query ?? ''), workspace, { sessionId: String(body.sessionId ?? '') }) })
           }
 
           if (route === '/remote/search') {
-            return sendJson(res, 200, await service.remoteCatalog(String(body.query ?? '')))
+            return sendJson(res, 200, await service.remoteCatalog(String(body.query ?? ''), { sessionId: String(body.sessionId ?? '') }))
           }
 
           if (route === '/remote/install') {
@@ -4534,6 +4697,7 @@ export function apply(ctx) {
                 sessionId: String(body.sessionId ?? ''),
                 instanceId: typeof body.instanceId === 'string' ? body.instanceId : undefined,
                 path: typeof body.path === 'string' ? body.path : undefined,
+                compatibilityConsent: body.compatibilityConsent === true,
               },
             ))
           }
@@ -4559,12 +4723,12 @@ export function apply(ctx) {
           if (route === '/learn') {
             const selector = skillSelector(body)
             const workspace = service.normalizeWorkspace(body.workspace ?? '')
-            return sendJson(res, 200, await service.learn(selector, workspace, { dryRun: body.dryRun === true, sessionId: selector.sessionId }))
+            return sendJson(res, 200, await service.learn(selector, workspace, { dryRun: body.dryRun === true, sessionId: selector.sessionId, compatibilityConsent: body.compatibilityConsent === true }))
           }
 
           if (route === '/learn-all') {
             const workspace = service.normalizeWorkspace(body.workspace ?? '')
-            return sendJson(res, 200, { ok: true, ...await service.learnAll(workspace, { sessionId: String(body.sessionId ?? '') }) })
+            return sendJson(res, 200, { ok: true, ...await service.learnAll(workspace, { sessionId: String(body.sessionId ?? ''), compatibilityConsent: body.compatibilityConsent === true }) })
           }
 
           if (route === '/install') {
@@ -4579,6 +4743,7 @@ export function apply(ctx) {
               conflict: typeof body.conflict === 'string' ? body.conflict : undefined,
               instanceId: typeof body.instanceId === 'string' ? body.instanceId : undefined,
               path: typeof body.path === 'string' ? body.path : undefined,
+              compatibilityConsent: body.compatibilityConsent === true,
             })
             return sendJson(res, 200, { ...result })
           }
@@ -4586,7 +4751,7 @@ export function apply(ctx) {
           if (route === '/toggle') {
             const selector = skillSelector(body)
             if (typeof body.enabled !== 'boolean') throw requestError(400, 'invalid-enabled', '启停状态必须是布尔值')
-            return sendJson(res, 200, await service.toggle(selector, body.enabled, body.workspace, { sessionId: selector.sessionId }))
+            return sendJson(res, 200, await service.toggle(selector, body.enabled, body.workspace, { sessionId: selector.sessionId, compatibilityConsent: body.compatibilityConsent === true }))
           }
 
           if (route === '/delete') {
@@ -4604,6 +4769,7 @@ export function apply(ctx) {
               Array.isArray(body.workspaces) ? body.workspaces.filter(item => typeof item === 'string') : [],
               service.normalizeWorkspace(body.workspace ?? ''),
               String(body.sessionId ?? ''),
+              { compatibilityConsent: body.compatibilityConsent === true },
             ))
           }
 
@@ -4663,10 +4829,12 @@ export function apply(ctx) {
             'audit-rejected': 409,
             'scope-conflict': 409,
             'target-conflict': 409,
+            'execution-incompatible': 409,
+            'compatibility-confirmation-required': 409,
             'readonly': 403,
           }
           const status = Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : codes[error?.code] ?? 500
-          return fail(res, status, error?.code ?? 'internal', error instanceof Error ? error.message : String(error))
+          return fail(res, status, error?.code ?? 'internal', error instanceof Error ? error.message : String(error), error.compatibility ? { compatibility: error.compatibility } : {})
         }
       },
     }), 'skill-detective: api routes')
@@ -4677,6 +4845,9 @@ export function apply(ctx) {
 
 /** Pure helpers exported for the Node test suite; not part of the plugin API. */
 export const __test = {
+  filesForCatalogEntry,
+  analyzeSkillCompatibility,
+  compatibilityDecision,
   AUDIT_POLICY_VERSION,
   PROMPT_DIR,
   readSkillSnapshot,

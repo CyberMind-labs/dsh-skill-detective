@@ -101,7 +101,7 @@ window.__ModuleLoader__.load({
       saved: '已保存',
       noWorkspaces: '默认工作区',
       marketTitle: '技能市场',
-      marketSource: '来源 skills.sh · 安装前自动安全审查',
+      marketSource: '内置目录候选；可联网搜索 skills.sh，安装前审查完整目录',
       back: '返回',
       install: '安装',
       installing: '安装中…',
@@ -141,11 +141,11 @@ window.__ModuleLoader__.load({
       learnAllRunning: '批量整合中…',
       learnAllDone: '完成：整合 {n} 个，跳过 {m} 个',
       updatesTitle: '检查更新',
-      updatesHint: '对比市场目录的安装量与版本，判断是否有同类上位替代',
+      updatesHint: '目录版本与安装量仅用于发现候选，不代表功能更好；安装前仍需检查兼容性与审查。',
       checking: '检查中…',
-      updateLatest: '已是最优',
+      updateLatest: '未发现目录更新',
       updateNewer: '可更新到 {v}',
-      updateBetter: '有上位替代：{name}',
+      updateBetter: '同类候选：{name}',
       installAlt: '安装替代',
       noUpdates: '没有可检查的技能',
       learnedOk: '已生成 {name}',
@@ -210,17 +210,17 @@ window.__ModuleLoader__.load({
       resolveFailed: '技能下载或定位失败。',
       completedWithWarnings: '操作已完成，但有警告',
       preserveSourceFiles: '需要保留的完整来源',
-      reviewSession: '用于审查的会话',
+      reviewSession: '使用技能与审查的会话',
       chooseSession: '选择一个会话',
-      reviewSessionHint: '请在已配置模型的会话中启用“技能侦探”。若列表为空，先发送一条消息再返回此页；临时技能仅在所选会话中启用。',
+      reviewSessionHint: '先在 DSH 打开或创建会话并配置模型，再在此选择。新会话打开后重新检查，无需开启自动推荐。临时技能仅在所选会话中启用。',
       sourceAuthors: '来源作者',
       auditFailed: '整合稿未通过安全审查，已阻止安装',
       suppressedTitle: '不再提示的需求',
       suppressedHint: '点过「先不用」的需求不会再弹窗，可在这里恢复',
       suppressedEmpty: '暂无',
       restore: '恢复',
-      replaceAsk: '需要同类技能替代',
-      replaceHint: '点击后自动查找同功能、安装量最高且尚未安装的同类技能并安装',
+      replaceAsk: '去市场查找替代',
+      replaceHint: '打开市场查找同类候选，由你检查兼容性后选择安装',
       replaceSearching: '正在查找同类技能…',
       replacing: '查找中…',
       replaceInstalled: '已安装同类技能 {name}',
@@ -340,7 +340,7 @@ window.__ModuleLoader__.load({
       saved: 'Saved',
       noWorkspaces: 'Default workspace',
       marketTitle: 'Marketplace',
-      marketSource: 'Source skills.sh · audited before install',
+      marketSource: 'Built-in catalog candidates; search skills.sh online. Full directories are reviewed before installation.',
       back: 'Back',
       install: 'Install',
       installing: 'Installing…',
@@ -380,11 +380,11 @@ window.__ModuleLoader__.load({
       learnAllRunning: 'Merging…',
       learnAllDone: 'Done: {n} merged, {m} skipped',
       updatesTitle: 'Check updates',
-      updatesHint: 'Compare installed skills with the marketplace catalog for newer versions or stronger alternatives',
+      updatesHint: 'Catalog versions and install counts only identify candidates, not better functionality. Check compatibility and review before installing.',
       checking: 'Checking…',
-      updateLatest: 'Up to date',
+      updateLatest: 'No catalog update found',
       updateNewer: 'Update to {v}',
-      updateBetter: 'Stronger peer: {name}',
+      updateBetter: 'Peer candidate: {name}',
       installAlt: 'Install',
       noUpdates: 'No skills to check',
       learnedOk: 'Created {name}',
@@ -449,17 +449,17 @@ window.__ModuleLoader__.load({
       resolveFailed: 'The skill could not be located or downloaded.',
       completedWithWarnings: 'Operation completed with warnings',
       preserveSourceFiles: 'Complete sources that must be preserved',
-      reviewSession: 'Session for review',
+      reviewSession: 'Conversation for skills and review',
       chooseSession: 'Choose a session',
-      reviewSessionHint: 'Enable Skill Detective in a conversation with a configured model. If the list is empty, send a message and return here. Temporary skills apply only to the selected session.',
+      reviewSessionHint: 'Open or create a DSH conversation and configure a model, then select it here. Check again after opening a new conversation; automatic recommendations are not required. Temporary skills apply only to the selected conversation.',
       sourceAuthors: 'Source authors',
       auditFailed: 'Merged draft failed the security audit; install blocked',
       suppressedTitle: 'Suppressed needs',
       suppressedHint: 'Needs dismissed with "Not now" never ask again. Restore them here.',
       suppressedEmpty: 'None',
       restore: 'Restore',
-      replaceAsk: 'Replace with a peer',
-      replaceHint: 'Finds the most installed peer of the same task that is not installed yet',
+      replaceAsk: 'Find alternatives in marketplace',
+      replaceHint: 'Find candidates in the marketplace, check compatibility and choose one explicitly',
       replaceSearching: 'Searching peers…',
       replacing: 'Searching…',
       replaceInstalled: 'Installed peer {name}',
@@ -514,6 +514,57 @@ window.__ModuleLoader__.load({
       bundleCount: '{n}',
     }
 
+    Object.assign(zh, {
+      startCheck: '开始检查', checkAgain: '重新检查', preflightTitle: '先检查，再使用技能',
+      preflightHint: '选择要使用技能的会话，逐项完成准备。适用于代码开发与仓库维护；检查通过不代表技能效果已验证。',
+      preflightReady: '准备条件已满足；实际任务效果仍需验证', preflightPending: '请完成以下准备',
+      preflightFailed: '准备检查失败，原任务和目标已保留', preflightEvidence: '查看技术依据',
+      checkPass: '已满足', checkAction: '待处理', checkBlocked: '受限', checkUnknown: '未确认',
+      modelUntested: '模型已配置，连接尚未验证', modelMissing: '尚未配置审查模型',
+      configureModelHint: '请在 DSH 的模型设置中选择可用于此会话的模型，返回后重新检查。',
+      chooseNativeHint: '请在 DSH 中明确选择原生工具模式，返回后重新检查。不会自动切换工具模式。',
+      selectWorkspaceHint: '请在 DSH 中打开要维护的仓库工作区，返回后重新检查。',
+      recommendationSwitchHint: '对话输入框的“技能侦探”开关只控制推荐；下方工具保护约束所选会话的工具调用。',
+      compatibility: '受限模式兼容性', compatSupported: '支持当前受限模式', compatBlocked: '当前受限模式不支持',
+      compatUnknown: '兼容性未确认', compatUnknownReason: '尚无完整目录检查依据。',
+      checkCompatibility: '检查兼容性', checkingCompatibility: '正在检查兼容性…',
+      restrictedTrial: '在受限模式下试用（效果未验证）', restrictedTrialHint: '兼容性仍未确认。仅显式试用后继续安装和完整审查，工具保护与权限保持原设置。',
+      compatibilityEvidence: '兼容性依据', retryTask: '重试原任务', locateFix: '定位准备问题',
+      recoveryTitle: '状态与备份恢复', previewRecovery: '预览备份恢复', restoreBackup: '恢复此备份',
+      recoveryPreviewHint: '先核对备份与保留原件的信息；只有点击恢复才会写入。不会自动覆盖未知数据。',
+      recoveryDone: '备份恢复完成，请重新检查', recoveryUnavailable: '此备份当前不能恢复',
+      recoveryValid: '状态可读取', recoveryCorrupt: '状态损坏', recoveryMissing: '状态文件缺失',
+      backupAvailable: '有固定备份可检查', backupMissing: '无可用备份', targetRetained: '保留的任务目标',
+      chooseSkillHint: '先在技能列表或市场选择候选技能，再检查兼容性或审查。',
+      backupFile: '备份文件', backupSize: '备份大小', backupModified: '备份修改时间', retainedOriginal: '原件保留位置',
+      catalogSource: '内置目录模板',
+    })
+    Object.assign(en, {
+      startCheck: 'Start checks', checkAgain: 'Check again', preflightTitle: 'Check before using skills',
+      preflightHint: 'Choose the conversation for code development or repository maintenance, then complete the preparation below. Passing does not verify task results.',
+      preflightReady: 'Prerequisites met; task results remain unverified', preflightPending: 'Complete these prerequisites',
+      preflightFailed: 'Preparation check failed; your task and target are retained', preflightEvidence: 'Technical evidence',
+      checkPass: 'Met', checkAction: 'Action needed', checkBlocked: 'Blocked', checkUnknown: 'Unconfirmed',
+      modelUntested: 'Model configured; connection not tested', modelMissing: 'Review model not configured',
+      configureModelHint: 'Choose a model for this conversation in DSH model settings, then check again.',
+      chooseNativeHint: 'Explicitly select native tools in DSH, then check again. Tool mode is never switched automatically.',
+      selectWorkspaceHint: 'Open the repository workspace in DSH, then check again.',
+      recommendationSwitchHint: 'The composer Skill Detective switch controls recommendations. Tool protection below limits this selected conversation’s tool calls.',
+      compatibility: 'Restricted-mode compatibility', compatSupported: 'Supports this restricted mode', compatBlocked: 'Unsupported in this restricted mode',
+      compatUnknown: 'Compatibility unconfirmed', compatUnknownReason: 'No full-directory inspection evidence yet.',
+      checkCompatibility: 'Check compatibility', checkingCompatibility: 'Checking compatibility…',
+      restrictedTrial: 'Try in restricted mode (results unverified)', restrictedTrialHint: 'Compatibility remains unconfirmed. An explicit trial continues installation and full review without changing protection or permissions.',
+      compatibilityEvidence: 'Compatibility evidence', retryTask: 'Retry original task', locateFix: 'Find preparation issues',
+      recoveryTitle: 'State and backup recovery', previewRecovery: 'Preview backup recovery', restoreBackup: 'Restore this backup',
+      recoveryPreviewHint: 'Check the backup and retained-original information first. Only Restore writes data; unknown state is never overwritten automatically.',
+      recoveryDone: 'Backup restored; run checks again', recoveryUnavailable: 'This backup cannot currently be restored',
+      recoveryValid: 'Readable', recoveryCorrupt: 'Corrupt', recoveryMissing: 'Missing',
+      backupAvailable: 'Fixed backup available for inspection', backupMissing: 'No backup available', targetRetained: 'Retained task target',
+      chooseSkillHint: 'Choose a candidate from the skill list or marketplace before checking compatibility or review.',
+      backupFile: 'Backup file', backupSize: 'Backup size', backupModified: 'Backup modified', retainedOriginal: 'Retained original',
+      catalogSource: 'Built-in catalog template',
+    })
+
     function interpolate(text, vars) {
       if (!vars) return text
       return String(text).replace(/\{(\w+)\}/g, (_, key) => (vars[key] === undefined ? `{${key}}` : String(vars[key])))
@@ -532,6 +583,21 @@ window.__ModuleLoader__.load({
 .sd-modal, .sd-modal h3, .sd-modal h4, .sd-modal .nm, .sd-bubble, .sd-panel, .sd-row, .sd-card { color: #e8e8ea; }
 .sd-page { width: 100%; height: 100%; min-height: 0; flex: 1 1 auto; box-sizing: border-box; overflow-y: auto; background: transparent; }
 .sd-page-inner { max-width: 1080px; margin: 0 auto; padding: 22px 32px 60px; }
+.sd-preflight { margin: 16px 18px; padding: 16px; border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); border-radius: 12px; color: CanvasText; background: Canvas; font-size: 13px; line-height: 1.6; }
+.sd-preflight h4, .sd-preflight .sd-hint { color: inherit; }
+.sd-preflight-head, .sd-checks li { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.sd-checks { padding-left: 0; list-style: none; }
+.sd-checks li { padding: 8px 0; border-bottom: 1px solid color-mix(in srgb, CanvasText 15%, transparent); }
+.sd-preflight .sd-btn, .sd-preflight .sd-select { color: CanvasText; background: Canvas; border-color: color-mix(in srgb, CanvasText 35%, transparent); }
+.sd-preflight pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; max-height: 240px; overflow: auto; }
+.sd-preflight details, .sd-recovery-preview { margin-top: 10px; }
+.sd-compat { font-size: 12px; line-height: 1.5; margin: 8px 0; overflow-wrap: anywhere; }
+.sd-compat[data-compatibility=blocked] strong { color: #ffb1a8; }
+.sd-compat[data-compatibility=unknown] strong { color: #e6ca8e; }
+.sd-compat[data-compatibility=supported] strong { color: #68ded1; }
+.sd-compat-action { min-width: 0; }
+.sd-task-error { margin: 12px 0; padding: 12px; color: #f7d7d3; background: #342225; border-radius: 8px; overflow-wrap: anywhere; }
+.sd-task-error .sd-btn { margin: 8px 8px 0 0; }
 .sd-topbar { display: flex; align-items: center; gap: 10px; padding: 4px 0 20px; }
 .sd-back { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid transparent; background: transparent; color: #8b8f98; cursor: pointer; }
 .sd-back:hover { background: rgba(255,255,255,.06); color: #e8e8ea; }
@@ -626,6 +692,20 @@ window.__ModuleLoader__.load({
 .sd-card-foot { display: flex; align-items: center; gap: 8px; color: #7a7f88; font-size: 12px; }
 .sd-card-foot .sd-btn { margin-left: auto; }
 .sd-cat { font-size: 11px; color: #9a9fa8; border: 1px solid rgba(255,255,255,.1); border-radius: 4px; padding: 0 6px; }
+.sd-market-page { color: CanvasText; }
+.sd-market-page .sd-topbar { flex-wrap: wrap; }
+.sd-market-page .sd-title { color: CanvasText; text-shadow: none; }
+.sd-market-page .sd-sub, .sd-market-page .sd-group-title { color: color-mix(in srgb, CanvasText 80%, Canvas); text-shadow: none; }
+.sd-market-page .sd-card { background: Canvas; color: CanvasText; border-color: color-mix(in srgb, CanvasText 22%, Canvas); box-shadow: 0 2px 12px color-mix(in srgb, CanvasText 10%, transparent); }
+.sd-market-page .sd-card-desc, .sd-market-page .sd-card-foot, .sd-market-page .sd-card .sd-meta, .sd-market-page .sd-cat, .sd-market-page .sd-hint { color: color-mix(in srgb, CanvasText 82%, Canvas); }
+.sd-market-page .sd-card .sd-icon, .sd-market-page .sd-cat { border-color: color-mix(in srgb, CanvasText 24%, Canvas); background: color-mix(in srgb, CanvasText 4%, Canvas); }
+.sd-market-page .sd-search { color: CanvasText; background: color-mix(in srgb, CanvasText 4%, Canvas); border-color: color-mix(in srgb, CanvasText 30%, Canvas); }
+.sd-market-page .sd-search::placeholder { color: color-mix(in srgb, CanvasText 68%, Canvas); }
+.sd-market-page .sd-btn:not(.primary), .sd-market-page .sd-back { color: CanvasText; background: color-mix(in srgb, CanvasText 3%, Canvas); border-color: color-mix(in srgb, CanvasText 28%, Canvas); }
+.sd-market-page .sd-btn:not(.primary):hover, .sd-market-page .sd-back:hover { color: CanvasText; background: color-mix(in srgb, CanvasText 9%, Canvas); }
+.sd-market-page .sd-compat[data-compatibility=unknown] strong { color: color-mix(in srgb, #b7791f 25%, CanvasText); }
+.sd-market-page .sd-compat[data-compatibility=blocked] strong { color: color-mix(in srgb, #d64545 25%, CanvasText); }
+.sd-market-page .sd-compat[data-compatibility=supported] strong { color: color-mix(in srgb, #00877b 25%, CanvasText); }
 .sd-toggle { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border-radius: 7px; border: 1px solid rgba(255,255,255,.07); background: transparent; color: #8b8f98; font-size: 12.5px; cursor: pointer; user-select: none; }
 .sd-toggle:hover { border-color: rgba(255,255,255,.14); color: #cfd2d8; }
 .sd-toggle.on { color: #35e0d2; border-color: rgba(53,224,210,.35); background: rgba(53,224,210,.07); }
@@ -927,6 +1007,178 @@ window.__ModuleLoader__.load({
       return error?.code === 'protection-required' ? t('protectionRequired') : error?.message || t('failTitle')
     }
 
+    function compatibilityView(candidate, t) {
+      const result = candidate?.compatibility && typeof candidate.compatibility === 'object' ? candidate.compatibility : {}
+      const status = ['supported', 'blocked', 'unknown'].includes(result.status) ? result.status : 'unknown'
+      return { ...result, status, label: t({ supported: 'compatSupported', blocked: 'compatBlocked', unknown: 'compatUnknown' }[status]), reason: result.summary || result.reason || t('compatUnknownReason') }
+    }
+
+    function CompatibilityInfo({ candidate, t }) {
+      const compatibility = compatibilityView(candidate, t)
+      return h('div', { className: 'sd-compat', 'data-compatibility': compatibility.status },
+        h('strong', null, compatibility.label),
+        h('div', null, compatibility.reason),
+        h('div', null, t('effectUnverified')),
+        (compatibility.requirements?.length || compatibility.basis) ? h('details', null,
+          h('summary', null, t('compatibilityEvidence')),
+          compatibility.basis ? h('div', null, compatibility.basis) : null,
+          (compatibility.requirements ?? []).map((requirement, index) => h('div', { key: index },
+            `${requirement.capability || ''} · ${requirement.status || ''} · ${requirement.reason || ''}`,
+            (requirement.evidence ?? []).map((evidence, i) => h('div', { key: i }, `${evidence.path || ''}${evidence.line ? `:${evidence.line}` : ''} ${evidence.excerpt || ''}`)),
+          )),
+        ) : null,
+      )
+    }
+
+    // An unknown candidate needs a read-only inspection before an explicit trial.
+    // Consent is created only by the trial button, never by a check or retry.
+    function CompatibilityAction({ candidate, sessionId, workspace, t, busy, onProceed, label, onFix, compact = false, inspectionContext }) {
+      const [checked, setChecked] = useState(null)
+      const [checking, setChecking] = useState(false)
+      const [error, setError] = useState('')
+      const context = inspectionContext ? { targetScope: inspectionContext.targetScope, targetWorkspaces: inspectionContext.targetWorkspaces || [] } : {}
+      const identity = `${candidate.id || skillKey(candidate)}:${sessionId}:${workspace}:${candidate.compatibility?.status || ''}:${candidate.compatibility?.checkedAt || ''}:${candidate.audit?.currentFingerprint || ''}:${JSON.stringify(context)}`
+      const activeIdentity = useRef(identity)
+      activeIdentity.current = identity
+      useEffect(() => { setChecked(null); setError(''); setChecking(false) }, [identity])
+      const effective = checked?.identity === identity ? { ...candidate, compatibility: checked.result } : candidate
+      const compatibility = compatibilityView(effective, t)
+      const inspect = async () => {
+        if (!sessionId || checking) return
+        const targetIdentity = identity
+        setChecking(true); setError('')
+        try {
+          const result = await api('/compatibility', { body: { ...(candidate.id ? { id: candidate.id } : skillSelector(candidate)), workspace, sessionId, ...context } })
+          if (activeIdentity.current !== targetIdentity) return
+          if (!result.compatibility || !['supported', 'blocked', 'unknown'].includes(result.compatibility.status)) throw new Error(t('compatUnknownReason'))
+          setChecked({ identity: targetIdentity, result: result.compatibility })
+        } catch (err) { if (activeIdentity.current === targetIdentity) setError(actionMessage(err, t)) }
+        finally { if (activeIdentity.current === targetIdentity) setChecking(false) }
+      }
+      const inspected = checked?.identity === identity
+      return h('div', { className: 'sd-compat-action' },
+        compact ? null : h(CompatibilityInfo, { candidate: effective, t }),
+        compatibility.status === 'unknown' ? h('button', { className: 'sd-btn', type: 'button', disabled: !sessionId || busy || checking, onClick: inspect }, checking ? t('checkingCompatibility') : t('checkCompatibility')) : null,
+        compatibility.status === 'supported' ? h('button', { className: 'sd-btn primary', type: 'button', disabled: !sessionId || busy || checking, onClick: () => onProceed(false, effective) }, label || t('install')) : null,
+        compatibility.status === 'unknown' && inspected ? h(React.Fragment, null,
+          h('div', { className: 'sd-hint' }, t('restrictedTrialHint')),
+          h('button', { className: 'sd-btn', type: 'button', disabled: !sessionId || busy || checking, onClick: () => onProceed(true, effective) }, t('restrictedTrial')),
+        ) : null,
+        error ? h('div', { role: 'alert' }, error) : null,
+        !sessionId && onFix ? h('button', { className: 'sd-btn', type: 'button', onClick: onFix }, t('locateFix')) : null,
+      )
+    }
+
+    const PREFLIGHT_ACTIONS = new Set(['choose-session', 'configure-model', 'choose-native-mode', 'select-workspace', 'enable-read-only-protection', 'open-protection', 'review-skill', 'check-compatibility', 'preview-recovery', 'retry-check'])
+    const RECOVERY_TARGETS = new Set(['protection', 'state', 'index', 'audit-cache'])
+
+    function RecoverySummary({ preview, t }) {
+      const summary = preview.summary
+      if (typeof summary === 'string') return h('p', null, summary)
+      const backup = summary?.backup || {}
+      return h('div', null,
+        summary?.label ? h('strong', null, summary.label) : null,
+        h('dl', null,
+          h('dt', null, t('backupFile')), h('dd', null, backup.path || summary?.backupPath || '—'),
+          h('dt', null, t('backupSize')), h('dd', null, `${backup.size ?? summary?.size ?? '—'} B`),
+          h('dt', null, t('backupModified')), h('dd', null, backup.mtime || summary?.modifiedAt || '—'),
+          summary?.preservedPath ? h(React.Fragment, null, h('dt', null, t('retainedOriginal')), h('dd', null, summary.preservedPath)) : null,
+        ),
+        summary?.impact ? h('p', null, summary.impact) : null,
+        h('details', null, h('summary', null, t('preflightEvidence')), h('pre', null, JSON.stringify(summary || {}, null, 2))),
+      )
+    }
+
+    function PreflightPanel({ sessionId, workspace, selector, t, sessionPicker, protectionControls, onResult, onChanged, onSkillAction, focus = 0 }) {
+      const [result, setResult] = useState(null)
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      const [hint, setHint] = useState('')
+      const [protectionOpen, setProtectionOpen] = useState(false)
+      const [preview, setPreview] = useState(null)
+      const [recoveryBusy, setRecoveryBusy] = useState(false)
+      const generation = useRef(0)
+      const load = useCallback(async () => {
+        const request = ++generation.current
+        setBusy(true); setError(''); setResult(null)
+        try {
+          const query = new URLSearchParams({ sessionId: sessionId || '', workspace: workspace || '', ...(selector ? { ...skillSelector(selector), ...(selector.id ? { id: selector.id } : {}) } : {}) })
+          for (const key of ['instanceId', 'path', 'name']) if (!query.get(key) || query.get(key) === 'undefined') query.delete(key)
+          const payload = await api(`/preflight?${query}`)
+          if (request !== generation.current) return
+          setResult(payload); onResult?.(payload)
+        } catch (err) { if (request === generation.current) setError(actionMessage(err, t)) }
+        finally { if (request === generation.current) setBusy(false) }
+      }, [sessionId, workspace, selector?.instanceId, selector?.path, selector?.name])
+      useEffect(() => { load(); return () => { generation.current += 1 } }, [load])
+      useEffect(() => { if (focus) { setHint(''); load() } }, [focus])
+      const previewRecovery = async target => {
+        if (!RECOVERY_TARGETS.has(target) || recoveryBusy) return
+        setRecoveryBusy(true); setPreview(null); setError('')
+        try { const payload = await api('/recovery/preview', { body: { target } }); setPreview({ ...payload, target }) }
+        catch (err) { setError(actionMessage(err, t)) }
+        finally { setRecoveryBusy(false) }
+      }
+      const restore = async () => {
+        if (!preview?.canRestore || !preview.previewToken || recoveryBusy) return
+        const snapshot = { target: preview.target, previewToken: preview.previewToken }
+        setRecoveryBusy(true); setError('')
+        try {
+          const restored = await api('/recovery/restore', { body: snapshot })
+          setPreview(null); setHint(`${t('recoveryDone')}${restored.preservedPath ? ` · ${t('retainedOriginal')}：${restored.preservedPath}` : ''}`); onChanged?.(); await load()
+        } catch (err) { setPreview(null); setError(actionMessage(err, t)) }
+        finally { setRecoveryBusy(false) }
+      }
+      const action = check => {
+        const type = check.action?.type
+        if (!PREFLIGHT_ACTIONS.has(type)) return
+        setHint('')
+        if (type === 'retry-check') load()
+        else if (type === 'choose-session') { try { document.getElementById('sd-review-session')?.focus() } catch {} }
+        else if (type === 'configure-model') setHint(t('configureModelHint'))
+        else if (type === 'choose-native-mode') setHint(t('chooseNativeHint'))
+        else if (type === 'select-workspace') setHint(t('selectWorkspaceHint'))
+        else if (type === 'enable-read-only-protection' || type === 'open-protection') setProtectionOpen(true)
+        else if (type === 'preview-recovery') previewRecovery(check.action.target || check.id)
+        else if (selector) onSkillAction?.(type, selector)
+        else setHint(t('chooseSkillHint'))
+      }
+      const checks = Array.isArray(result?.checks) ? result.checks : []
+      return h('section', { className: 'sd-preflight', id: 'sd-preflight', 'aria-label': t('preflightTitle') },
+        h('div', { className: 'sd-preflight-head' }, h('strong', null, t('preflightTitle')),
+          h('button', { className: 'sd-btn primary', type: 'button', disabled: busy, onClick: load }, busy ? t('checking') : result ? t('checkAgain') : t('startCheck'))),
+        h('p', null, t('preflightHint')), sessionPicker,
+        selector ? h('div', null, `${t('targetRetained')}：${selector.displayName || selector.name}`) : null,
+        error ? h('div', { role: 'alert' }, `${t('preflightFailed')}：${error}`) : null,
+        result ? h('div', { role: 'status' }, t(result.ready === true ? 'preflightReady' : 'preflightPending')) : null,
+        h('ul', { className: 'sd-checks' }, checks.map(check => h('li', { key: check.id, 'data-check-status': check.status },
+          h('span', null, `${t({ pass: 'checkPass', action: 'checkAction', blocked: 'checkBlocked', unknown: 'checkUnknown' }[check.status] || 'checkUnknown')} · ${check.message || check.id}`),
+          check.status !== 'pass' && PREFLIGHT_ACTIONS.has(check.action?.type) ? h('button', { className: 'sd-btn', type: 'button', onClick: () => action(check) }, check.action.label || t('locateFix')) : null,
+        ))),
+        result?.model ? h('div', null, t(result.model.configured ? 'modelUntested' : 'modelMissing')) : null,
+        hint ? h('p', { role: 'status' }, hint) : null,
+        h('div', null, t('recommendationSwitchHint')),
+        h('button', { className: 'sd-btn', type: 'button', onClick: () => setProtectionOpen(value => !value), 'aria-expanded': protectionOpen }, t('protectionTitle')),
+        protectionOpen ? protectionControls : null,
+        (result?.recovery?.files ?? []).length ? h('details', { className: 'sd-recovery' },
+          h('summary', null, t('recoveryTitle')), h('p', null, t('recoveryPreviewHint')),
+          result.recovery.files.map(file => h('div', { key: file.id },
+            h('span', null, `${file.label || file.id} · ${t({ valid: 'recoveryValid', corrupt: 'recoveryCorrupt', missing: 'recoveryMissing' }[file.state] || 'checkUnknown')} · ${t(file.backupAvailable ? 'backupAvailable' : 'backupMissing')}`),
+            file.backupAvailable && RECOVERY_TARGETS.has(file.id) ? h('button', { className: 'sd-btn', type: 'button', disabled: recoveryBusy, onClick: () => previewRecovery(file.id) }, t('previewRecovery')) : null,
+          )),
+        ) : null,
+        preview ? h('div', { className: 'sd-recovery-preview', role: 'status' },
+          h('strong', null, preview.target),
+          h(RecoverySummary, { preview, t }),
+          preview.reason ? h('div', null, preview.reason) : null,
+          !preview.canRestore ? h('div', null, t('recoveryUnavailable')) : null,
+          h('button', { className: 'sd-btn', type: 'button', disabled: !preview.canRestore || !preview.previewToken || recoveryBusy, onClick: restore }, t('restoreBackup')),
+          h('button', { className: 'sd-btn', type: 'button', disabled: recoveryBusy, onClick: () => setPreview(null) }, t('cancel')),
+        ) : null,
+        result ? h('details', null, h('summary', null, t('preflightEvidence')), h('pre', null, JSON.stringify({ model: result.model, protection: result.protection, workspace: result.workspace }, null, 2))) : null,
+      )
+    }
+
     function auditView(skill, t) {
       const audit = skill?.audit && typeof skill.audit === 'object' ? skill.audit : {}
       const labels = {
@@ -1180,31 +1432,36 @@ window.__ModuleLoader__.load({
         if (sessionRef.current) await api('/dismiss', { body: { sessionId: sessionRef.current, recommendationId: view?.recommendationId, suppress: true } }).catch(() => {})
       }
 
-      const start = async (needArg, labelArg, conflictMode) => {
+      const start = async (needArg, labelArg, conflictMode, trial) => {
         const need = needArg ?? view?.need
         const label = labelArg ?? view?.label
         const searchText = view?.searchText ?? ''
         const recommendationId = view?.recommendationId
-        const sessionId = sessionRef.current
+        const sessionId = view?.requestBody?.sessionId || sessionRef.current
         const retryConflict = conflictMode ?? view?.conflictMode
         const conflictInfo = view?.conflict ?? view?.conflictInfo
         if (need === undefined || label === undefined) return
+        const target = trial?.candidate
+        const route = target?.id ? '/remote/install' : target ? '/install' : view?.requestRoute || '/install'
+        const requestBody = {
+          ...(target ? { sessionId, ...(target.id ? { id: target.id } : { name: target.name }), ...(target.scope ? { scope: target.scope } : {}) }
+            : view?.requestBody || { need, sessionId, text: searchText }),
+          ...(retryConflict ? { conflict: retryConflict } : {}),
+          ...(retryConflict && conflictInfo ? { ...skillSelector(conflictInfo), scope: conflictInfo.scope } : {}),
+          ...(trial?.consent === true ? { compatibilityConsent: true } : {}),
+        }
         setFade(false)
         setSteps([{ id: 'install', label: t('processingInstall'), detail: t('processingHint'), status: 'run' }])
         setView({ kind: 'progress' })
 
         try {
-          const result = await api('/install', {
+          const result = await api(route, {
             allowFailure: true,
-            body: {
-              need, sessionId, text: searchText,
-              ...(retryConflict ? { conflict: retryConflict } : {}),
-              ...(retryConflict && conflictInfo ? { ...skillSelector(conflictInfo), scope: conflictInfo.scope } : {}),
-            },
+            body: requestBody,
           })
           clearTimers()
           if (!result.ok && result.code === 'name-conflict') {
-            setView({ kind: 'conflict', need, label, searchText, recommendationId, conflict: result.conflict })
+            setView({ kind: 'conflict', need, label, searchText, recommendationId, conflict: result.conflict, requestBody, requestRoute: route })
             return
           }
           const real = Array.isArray(result.steps) ? result.steps : []
@@ -1225,13 +1482,15 @@ window.__ModuleLoader__.load({
               schedule(() => setView(null), 420)
             }, 4200)
           } else {
-            setView({ ...installFailure(result, t), need, label, searchText, recommendationId, conflictMode: retryConflict, conflictInfo })
+            setView({ ...installFailure(result, t), need, label, searchText, recommendationId, conflictMode: retryConflict, conflictInfo, requestBody, requestRoute: route,
+              compatibilityCandidate: result.compatibility && result.candidate ? { ...result.candidate, id: result.candidate.remoteId || result.candidate.id, compatibility: result.compatibility } : null })
           }
         } catch (error) {
           clearTimers()
           const failure = error.payload ? installFailure(error.payload, t) : { kind: 'failed', message: error.name === 'TypeError' ? t('networkFailed') : error.message || t('networkFailed') }
           setSteps([{ id: 'install', label: t('installFailed'), status: 'fail', detail: failure.message }])
-          setView({ ...failure, need, label, searchText, recommendationId, conflictMode: retryConflict, conflictInfo })
+          setView({ ...failure, need, label, searchText, recommendationId, conflictMode: retryConflict, conflictInfo, requestBody, requestRoute: route,
+            compatibilityCandidate: error.payload?.compatibility && error.payload?.candidate ? { ...error.payload.candidate, id: error.payload.candidate.remoteId || error.payload.candidate.id, compatibility: error.payload.compatibility } : null })
         }
       }
 
@@ -1239,10 +1498,13 @@ window.__ModuleLoader__.load({
 
       let body = null
       if (view.kind === 'recommend') {
+        const candidate = view.candidates?.[0]
         body = h(React.Fragment, null,
           h('div', { className: 'sd-bubble-text' }, '🐟 ', h('em', null, t('bubbleAsk', { label: view.label }))),
+          candidate?.name ? h(CompatibilityAction, { candidate, sessionId: sessionRef.current, t, label: t('find'),
+            onProceed: (consent, effective) => start(undefined, undefined, undefined, { candidate: effective, consent }) }) : null,
           h('div', { className: 'sd-bubble-actions' },
-            h('button', { className: 'sd-pbtn main', type: 'button', onClick: () => start() }, t('find')),
+            !candidate?.name ? h('button', { className: 'sd-pbtn main', type: 'button', onClick: () => start() }, t('find')) : null,
             h('button', { className: 'sd-pbtn', type: 'button', onClick: dismiss }, t('notNow')),
           ),
         )
@@ -1280,9 +1542,12 @@ window.__ModuleLoader__.load({
           h('div', { className: 'sd-bubble-text', role: view.kind === 'failed' ? 'alert' : undefined },
             view.kind === 'failed' ? `${t('installFailed')}：${view.message}` : t('noneLine')),
           h('div', { className: 'sd-bubble-actions' },
-            h('button', { className: 'sd-pbtn main', type: 'button', onClick: () => start(view.need, view.label) }, t('retry')),
+            !view.compatibilityCandidate ? h('button', { className: 'sd-pbtn main', type: 'button', onClick: () => start(view.need, view.label) }, t('retry')) : null,
             h('button', { className: 'sd-pbtn', type: 'button', onClick: () => setView(null) }, t('close')),
           ),
+          view.compatibilityCandidate ? h(CompatibilityAction, { candidate: view.compatibilityCandidate, sessionId: view.requestBody?.sessionId || sessionRef.current,
+            workspace: view.requestBody?.workspace || '', t,
+            onProceed: (consent, effective) => start(undefined, undefined, undefined, { candidate: effective, consent }) }) : null,
         )
       }
 
@@ -1312,7 +1577,7 @@ window.__ModuleLoader__.load({
     }
 
     function Row(props) {
-      const { skill, t, onDetail, onOpen, onToggle, onAskDelete, onReplace, replacing, deleting, busy } = props
+      const { skill, t, onDetail, onOpen, onToggle, onAskDelete, onReplace, replacing, deleting, busy, sessionId, workspace, onFix } = props
       const meta = ORIGIN_META[skill.origin] ?? ORIGIN_META.user
       const managed = skill.managed !== false
       const shownName = skill.displayName || skill.name
@@ -1360,6 +1625,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'sd-meta' }, metaParts.join(' · ')),
           sourceLine ? h('div', { className: 'sd-subline' }, sourceLine) : null,
           h(AuditEvidence, { skill, t, compact: true }),
+          h(CompatibilityInfo, { candidate: skill, t }),
           h('div', { className: `sd-subline${skill.permWarn ? ' warn' : ''}` }, `${t('perm')}：${skill.permLabel}`),
           !skill.enabled && managed
             ? h('button', {
@@ -1381,12 +1647,14 @@ window.__ModuleLoader__.load({
           skill.path
             ? h('button', { className: 'sd-iconbtn', type: 'button', title: t('openFolder'), onClick: () => onOpen(skill) }, iconFolder(15))
             : null,
-          skill.path
+          skill.path && skill.enabled
             ? h('button', {
-              className: 'sd-iconbtn', type: 'button', title: skill.enabled ? t('disable') : t('enable'),
+              className: 'sd-iconbtn', type: 'button', title: t('disable'),
               disabled: busy, onClick: () => onToggle(skill),
-            }, skill.enabled ? iconMinus(15) : iconPlus(15))
+            }, iconMinus(15))
             : null,
+          skill.path && !skill.enabled ? h(CompatibilityAction, { candidate: skill, sessionId, workspace, t, busy, label: t('enable'), compact: true,
+            onProceed: (consent, effective) => onToggle(effective, consent), onFix: () => onFix?.(skill) }) : null,
           managed
             ? h('button', { className: 'sd-iconbtn danger', type: 'button', title: t('del'), onClick: () => onAskDelete(skill, 'ask') }, iconTrash(15))
             : h('span', { className: 'sd-badge grey', title: t('bundledHint') }, t('bundledBadge')),
@@ -1463,6 +1731,7 @@ window.__ModuleLoader__.load({
             h('dt', null, t('perm')), h('dd', { style: skill.permWarn ? { color: '#c9a96a' } : undefined }, skill.permLabel),
           ) : null,
           skill ? h(AuditEvidence, { skill, t }) : null,
+          skill ? h(CompatibilityInfo, { candidate: skill, t }) : null,
           !sessionId ? h('div', { className: 'sd-hint', style: { marginTop: 8 } }, t('reviewSessionHint')) : null,
           data ? h('div', null,
             h('div', { className: 'sd-h4' }, t('fileTree')),
@@ -1473,7 +1742,9 @@ window.__ModuleLoader__.load({
           h('div', { className: 'sd-modal-foot' },
             h('button', { className: 'sd-btn', type: 'button', disabled: !sessionId || reviewing, onClick: review }, reviewing ? t('reviewing') : t('reviewAgain')),
             skill && skill.path ? h('button', { className: 'sd-btn', type: 'button', onClick: () => { onOpen(skill) } }, t('openFolder')) : null,
-            skill && skill.path ? h('button', { className: 'sd-btn', type: 'button', onClick: () => { onToggle(skill); onClose() } }, skill.enabled ? t('disable') : t('enable')) : null,
+            skill && skill.path && skill.enabled ? h('button', { className: 'sd-btn', type: 'button', onClick: () => { onToggle(skill); onClose() } }, t('disable')) : null,
+            skill && skill.path && !skill.enabled ? h(CompatibilityAction, { candidate: skill, workspace, sessionId, t, label: t('enable'), compact: true,
+              onProceed: (consent, effective) => { onToggle(effective, consent); onClose() } }) : null,
             skill && skill.managed !== false ? h('button', { className: 'sd-btn danger', type: 'button', onClick: () => { onDelete(skill); onClose() } }, t('del')) : null,
             h('button', { className: 'sd-btn primary', type: 'button', onClick: onClose }, t('close')),
           ),
@@ -1496,6 +1767,7 @@ window.__ModuleLoader__.load({
       })
       const [saving, setSaving] = useState(false)
       const [error, setError] = useState('')
+      const [failedMove, setFailedMove] = useState(null)
       const appliedScopes = useRef(new Set())
 
       useEffect(() => {
@@ -1534,7 +1806,14 @@ window.__ModuleLoader__.load({
           const changes = scopeChanges(data.installed.filter(skill => !appliedScopes.current.has(skillKey(skill))), rows, data.workspace, sessionId, t)
           await api('/settings', { body: { defaultScope } })
           for (const body of changes) {
-            await api('/scope', { body })
+            try { await api('/scope', { body }) }
+            catch (err) {
+              if (err.code === 'compatibility-confirmation-required' || err.code === 'execution-incompatible') {
+                const candidate = data.installed.find(skill => skillKey(skill) === skillKey(body)) || body
+                setFailedMove({ candidate: { ...candidate, ...(err.payload?.compatibility ? { compatibility: err.payload.compatibility } : {}) }, body })
+              }
+              throw err
+            }
             appliedScopes.current.add(skillKey(body))
           }
           onSaved()
@@ -1545,6 +1824,20 @@ window.__ModuleLoader__.load({
         } finally {
           setSaving(false)
         }
+      }
+      const resumeMove = async consent => {
+        if (!failedMove || saving) return
+        const operation = failedMove
+        const body = { ...operation.body, ...(consent === true ? { compatibilityConsent: true } : {}) }
+        setSaving(true); setError('')
+        try {
+          await api('/scope', { body })
+          appliedScopes.current.add(skillKey(operation.body)); setFailedMove(null); onSaved?.()
+        } catch (err) {
+          setFailedMove({ ...operation, body, candidate: err.payload?.compatibility ? { ...operation.candidate, compatibility: err.payload.compatibility } : operation.candidate })
+          setError(actionMessage(err, t))
+        }
+        finally { setSaving(false) }
       }
 
       return h('div', { className: 'sd-overlay', onMouseDown: event => { if (event.target === event.currentTarget) onClose() } },
@@ -1611,6 +1904,13 @@ window.__ModuleLoader__.load({
               }, t('restore')),
             ))),
           error ? h('div', { style: { color: '#ff8080', fontSize: 12, marginTop: 10 } }, error) : null,
+          failedMove ? h('div', { className: 'sd-task-error' },
+            h('strong', null, `${failedMove.candidate.displayName || failedMove.candidate.name} → ${scopeLabel(failedMove.body.scope, t)}`),
+            h(CompatibilityAction, { candidate: failedMove.candidate, sessionId: failedMove.body.sessionId || '', workspace: failedMove.body.workspace,
+              inspectionContext: { targetScope: failedMove.body.scope, targetWorkspaces: failedMove.body.workspaces },
+              t, busy: saving, label: t('retryTask'), onProceed: consent => resumeMove(consent) }),
+            h('details', null, h('summary', null, t('targetRetained')), h('pre', null, JSON.stringify(failedMove.body, null, 2))),
+          ) : null,
           h('div', { className: 'sd-modal-foot' },
             h('button', { className: 'sd-btn', type: 'button', onClick: onClose }, t('cancel')),
             h('button', { className: 'sd-btn primary', type: 'button', disabled: saving, onClick: save }, saving ? t('saving') : t('save')),
@@ -1624,6 +1924,7 @@ window.__ModuleLoader__.load({
       const [items, setItems] = useState(null)
       const [error, setError] = useState('')
       const [busy, setBusy] = useState({})
+      const [failure, setFailure] = useState(null)
 
       useEffect(() => {
         let alive = true
@@ -1649,11 +1950,14 @@ window.__ModuleLoader__.load({
         return () => window.removeEventListener('keydown', onKey)
       }, [onClose])
 
-      const install = async name => {
+      const run = async operation => {
         if (!sessionId) { pushToast(t('reviewSessionHint')); return }
+        const name = operation.candidate.name
+        if (busy[name]) return
+        setFailure(null)
         setBusy(current => ({ ...current, [name]: true }))
         try {
-          const result = await api('/install', { body: { name, origin: 'market', workspace, sessionId } })
+          const result = await api('/install', { body: operation.body })
           if (result.ok) {
             pushToast(`${t('learnedOk', { name: result.name })} ✓`)
             onInstalled?.()
@@ -1661,6 +1965,7 @@ window.__ModuleLoader__.load({
             pushToast(t('noneLine'))
           }
         } catch (err) {
+          setFailure({ ...operation, message: actionMessage(err, t) })
           pushToast(actionMessage(err, t))
         } finally {
           setBusy(current => ({ ...current, [name]: false }))
@@ -1672,6 +1977,7 @@ window.__ModuleLoader__.load({
           h('h3', null, t('updatesTitle')),
           h('div', { className: 'sd-muted' }, t('updatesHint')),
           error ? h('div', { style: { color: '#ff8080', fontSize: 12.5, marginTop: 10 } }, error) : null,
+          failure ? h(TaskFailure, { failure, t, busy: busy[failure.candidate.name], onRetry: () => run(failure) }) : null,
           items === null ? h('div', { className: 'sd-hint', style: { padding: '22px 0' } }, t('checking')) : null,
           items !== null && items.length === 0 ? h('div', { className: 'sd-hint', style: { padding: '22px 0' } }, t('noUpdates')) : null,
           items !== null && items.length > 0 ? h('div', { style: { marginTop: 12 } }, items.map(item => h('div', { key: skillKey(item), className: 'sd-upd-row' },
@@ -1694,10 +2000,8 @@ window.__ModuleLoader__.load({
                 : h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
                   h('span', { className: 'sd-tag info' }, t('updateBetter', { name: item.suggestion.name })),
                   item.suggestion && !item.suggestion.installed
-                    ? h('button', {
-                      className: 'sd-btn primary', type: 'button', disabled: !sessionId || busy[item.suggestion.name] === true,
-                      onClick: () => install(item.suggestion.name),
-                    }, busy[item.suggestion.name] === true ? t('installing') : t('installAlt'))
+                    ? h(CompatibilityAction, { candidate: item.suggestion, workspace, sessionId, t, busy: busy[item.suggestion.name], label: t('installAlt'),
+                      onProceed: (consent, candidate) => run({ candidate, body: { name: candidate.name, origin: 'market', workspace, sessionId, ...(consent === true ? { compatibilityConsent: true } : {}) } }) })
                     : null,
                 ),
           ))) : null,
@@ -1719,12 +2023,14 @@ window.__ModuleLoader__.load({
       const [batchRunning, setBatchRunning] = useState(false)
       const [authorModal, setAuthorModal] = useState(null)
       const [showDraft, setShowDraft] = useState(false)
+      const [buildFailure, setBuildFailure] = useState(null)
 
       const analyze = async skill => {
         if (!sessionId) { setError(t('reviewSessionHint')); return }
         setSelected(skill)
         setAnalysis(null)
         setError('')
+        setBuildFailure(null)
         setShowDraft(false)
         setLoading(true)
         try {
@@ -1737,20 +2043,27 @@ window.__ModuleLoader__.load({
         }
       }
 
-      const build = async () => {
-        if (selected === null || !sessionId || analysis?.previewOnly === true || analysis?.code === 'unsupported-learning-assets' || !analysis?.merged) return
+      const runBuild = async operation => {
+        if (building) return
+        setBuildFailure(null)
         setBuilding(true)
         try {
-          const result = await api('/learn', { body: { ...skillSelector(selected), workspace, sessionId } })
+          const result = await api('/learn', { body: operation.body })
           pushToast(t('learnedOk', { name: result.name }))
           onInstalled?.()
           setAnalysis(null)
           setSelected(null)
         } catch (err) {
+          setBuildFailure({ ...operation, message: actionMessage(err, t) })
           pushToast(actionMessage(err, t))
-        } finally {
-          setBuilding(false)
-        }
+        } finally { setBuilding(false) }
+      }
+      const build = async (consent = false) => {
+        if (selected === null || !sessionId || analysis?.previewOnly === true || analysis?.code === 'unsupported-learning-assets' || !analysis?.merged) return
+        const compatibility = compatibilityView({ compatibility: analysis.compatibility || analysis.merged.compatibility }, t)
+        if (compatibility.status === 'blocked' || (compatibility.status === 'unknown' && consent !== true)) return
+        return runBuild({ candidate: selected, body: { ...skillSelector(selected), workspace, sessionId,
+          ...(consent === true ? { compatibilityConsent: true } : {}) } })
       }
 
       const learnAll = async () => {
@@ -1773,6 +2086,8 @@ window.__ModuleLoader__.load({
       const visibleAuthors = authors.slice(0, 3)
       const peers = Array.isArray(analysis?.peers) ? analysis.peers : []
       const previewOnly = analysis?.previewOnly === true || analysis?.code === 'unsupported-learning-assets'
+      const mergedCompatibility = compatibilityView({ compatibility: analysis?.compatibility || analysis?.merged?.compatibility }, t)
+      const mergedInspected = ['full-directory', 'catalog-template'].includes(mergedCompatibility.basis)
 
       return h('div', { className: 'sd-page-inner' },
         h('div', { className: 'sd-topbar' },
@@ -1808,6 +2123,7 @@ window.__ModuleLoader__.load({
               ? `${t('peersTitle')} · ${peers.length + 1}`
               : '\u00a0'),
             error !== '' ? h('div', { className: 'sd-panel' }, h('div', { style: { color: '#ff9a9a', fontSize: 13 } }, error)) : null,
+            buildFailure ? h(TaskFailure, { failure: buildFailure, t, busy: building, onRetry: () => runBuild(buildFailure) }) : null,
             loading ? h('div', { className: 'sd-panel' }, h('div', { className: 'sd-hint' }, t('analyzing'))) : null,
             analysis !== null ? h(React.Fragment, null,
               previewOnly ? h('div', { className: 'sd-panel', role: 'alert' },
@@ -1847,10 +2163,15 @@ window.__ModuleLoader__.load({
                 h('div', { className: 'sd-learn-actions' },
                   h('button', { className: 'sd-btn', type: 'button', disabled: !analysis.merged?.markdown, onClick: () => setShowDraft(current => !current) }, showDraft ? t('mergedTitle') + ' ▴' : t('mergedTitle') + ' ▾'),
                   h('button', {
-                    className: 'sd-btn primary', type: 'button', disabled: previewOnly || !analysis.merged || !sessionId || building || (analysis.audit && analysis.audit.poison),
-                    onClick: build,
+                    className: 'sd-btn primary', type: 'button', disabled: previewOnly || !analysis.merged || !sessionId || building || (analysis.audit && analysis.audit.poison) || mergedCompatibility.status !== 'supported',
+                    onClick: () => build(false),
                   }, building ? t('generating') : t('generateMerged')),
+                  !previewOnly && mergedCompatibility.status === 'unknown' && mergedInspected ? h('button', {
+                    className: 'sd-btn', type: 'button', disabled: !sessionId || building || !analysis.merged || !!analysis.audit?.poison, onClick: () => build(true),
+                  }, t('restrictedTrial')) : null,
                 ),
+                !previewOnly ? h(CompatibilityInfo, { candidate: { compatibility: mergedCompatibility }, t }) : null,
+                !previewOnly && mergedCompatibility.status === 'unknown' ? h('div', { className: 'sd-hint' }, t('restrictedTrialHint')) : null,
                 analysis.audit && analysis.audit.poison
                   ? h('div', { style: { color: '#ff9a9a', fontSize: 12, marginTop: 8 } }, t('auditFailed'))
                   : null,
@@ -1884,259 +2205,123 @@ window.__ModuleLoader__.load({
       )
     }
 
+    function TaskFailure({ failure, t, busy, onRetry, onFix }) {
+      if (!failure) return null
+      return h('div', { className: 'sd-task-error', role: 'alert' },
+        h('strong', null, failure.candidate?.displayName || failure.candidate?.name || failure.candidate?.id || ''),
+        h('div', null, failure.message),
+        h('button', { className: 'sd-btn', type: 'button', disabled: busy, onClick: onRetry }, t('retryTask')),
+        onFix ? h('button', { className: 'sd-btn', type: 'button', onClick: () => onFix(failure.candidate) }, t('locateFix')) : null,
+        h('details', null, h('summary', null, t('targetRetained')), h('pre', null, JSON.stringify(failure.body, null, 2))),
+      )
+    }
+
     function MarketView(props) {
-      const { t, workspace, sessionId = '', onBack, onInstalled, pushToast } = props
+      const { t, workspace, sessionId = '', onBack, onInstalled, pushToast, onFix, initialQuery = '' } = props
       const [skills, setSkills] = useState([])
       const [error, setError] = useState('')
       const [busy, setBusy] = useState({})
-      const [phase, setPhase] = useState({})
       const [failures, setFailures] = useState({})
-      const [query, setQuery] = useState('')
+      const [query, setQuery] = useState(initialQuery)
       const [visibleCount, setVisibleCount] = useState(MARKET_PAGE_SIZE)
       const [remoteSkills, setRemoteSkills] = useState([])
       const [remoteState, setRemoteState] = useState('idle')
       const [remoteError, setRemoteError] = useState('')
-      const [remoteBusy, setRemoteBusy] = useState({})
       const [conflict, setConflict] = useState(null)
-
       const load = useCallback(() => {
         api(`/market?workspace=${encodeURIComponent(workspace ?? '')}&sessionId=${encodeURIComponent(sessionId)}`)
-          .then(payload => {
-            setSkills(payload.skills)
-            setError('')
-          })
+          .then(payload => { setSkills(Array.isArray(payload.skills) ? payload.skills : []); setError('') })
           .catch(err => setError(actionMessage(err, t)))
       }, [workspace, sessionId])
-
-      useEffect(() => {
-        load()
-      }, [load])
-
-      const install = async (skill, conflictMode, conflictInfo) => {
-        if (!sessionId) { pushToast(t('reviewSessionHint')); return }
-        if (busy[skill.name]) return
-        setBusy(current => ({ ...current, [skill.name]: true }))
-        setPhase(current => ({ ...current, [skill.name]: 'installing' }))
+      useEffect(() => { load() }, [load])
+      useEffect(() => { setVisibleCount(MARKET_PAGE_SIZE) }, [query])
+      const keyOf = (kind, candidate) => `${kind}:${candidate.id || candidate.name}`
+      const run = async operation => {
+        const { kind, candidate, body } = operation
+        const key = keyOf(kind, candidate)
+        if (busy[key]) return
+        setBusy(current => ({ ...current, [key]: true }))
+        setFailures(current => ({ ...current, [key]: null }))
         try {
-          const result = await api('/install', {
-            allowFailure: true,
-            body: {
-              name: skill.name,
-              origin: 'market',
-              workspace,
-              sessionId,
-              ...(conflictInfo ? skillSelector(conflictInfo) : {}),
-              ...(conflictMode ? { conflict: conflictMode } : {}),
-            },
-          })
-          if (!result.ok && result.code === 'name-conflict') {
-            setPhase(current => ({ ...current, [skill.name]: '' }))
-            setConflict({ kind: 'market', skill, info: result.conflict })
-            return
-          }
-          if (result.ok) {
-            const shown = result.displayName || result.name
-            setPhase(current => ({ ...current, [skill.name]: 'done' }))
-            setFailures(current => ({ ...current, [skill.name]: '' }))
-            if (result.name === skill.name) {
-              setSkills(current => current.map(item => (item.name === skill.name ? { ...item, installed: true } : item)))
-            }
-            onInstalled?.()
-            pushToast(`${t('marketInstalling', { name: shown })} ✓`)
-            if (result.renamedFrom) pushToast(t('renamedTo', { name: shown }))
-          } else {
-            setPhase(current => ({ ...current, [skill.name]: '' }))
-            const failedStep = Array.isArray(result.steps)
-              ? [...result.steps].reverse().find(step => step.status === 'fail')
-              : undefined
-            const message = result.code === 'protection-required' ? t('protectionRequired') : failedStep?.detail ?? result.message ?? t('noneLine')
-            setFailures(current => ({ ...current, [skill.name]: message }))
-            pushToast(`${skill.name} · ${message}`)
-          }
-        } catch (err) {
-          setPhase(current => ({ ...current, [skill.name]: '' }))
-          setFailures(current => ({ ...current, [skill.name]: actionMessage(err, t) }))
-          pushToast(actionMessage(err, t))
-        } finally {
-          setBusy(current => ({ ...current, [skill.name]: false }))
-        }
-      }
-
-      const resolveConflict = async mode => {
-        const current = conflict
-        if (current === null) return
-        setConflict(null)
-        if (mode === 'cancel') {
-          pushToast(t('conflictCancelled'))
-          return
-        }
-        if (current.kind === 'remote') await installRemoteSkill(current.skill, mode, current.info)
-        else await install(current.skill, mode, current.info)
-      }
-
-      const filtered = useMemo(() => {
-        const needle = query.trim().toLowerCase()
-        if (needle === '') return skills
-        return skills.filter(skill =>
-          String(skill.name).toLowerCase().includes(needle) ||
-          String(skill.description ?? '').toLowerCase().includes(needle))
-      }, [skills, query])
-
-      const visible = filtered.slice(0, visibleCount)
-      const hasMore = filtered.length > visibleCount
-
-      // A new query always restarts from the first batch.
-      useEffect(() => {
-        setVisibleCount(MARKET_PAGE_SIZE)
-      }, [query])
-
-      /** Online lookup against skills.sh, kept separate from the bundled catalog. */
-      const searchRemote = async () => {
-        const keyword = query.trim()
-        if (keyword === '') return
-        setRemoteState('loading')
-        setRemoteError('')
-        try {
-          const result = await api('/remote/search', { body: { query: keyword } })
-          setRemoteSkills(Array.isArray(result.skills) ? result.skills : [])
-          setRemoteState('ok')
-        } catch (err) {
-          setRemoteSkills([])
-          setRemoteError(actionMessage(err, t))
-          setRemoteState('error')
-        }
-      }
-
-      const installRemoteSkill = async (item, conflictMode, conflictInfo) => {
-        if (!sessionId) { pushToast(t('reviewSessionHint')); return }
-        if (remoteBusy[item.id] === true) return
-        setRemoteBusy(current => ({ ...current, [item.id]: true }))
-        try {
-          const result = await api('/remote/install', {
-            allowFailure: true,
-            body: {
-              id: item.id,
-              workspace,
-              sessionId,
-              ...(conflictInfo ? skillSelector(conflictInfo) : {}),
-              ...(conflictMode ? { conflict: conflictMode } : {}),
-            },
-          })
-          if (!result.ok && result.code === 'name-conflict') {
-            setConflict({ kind: 'remote', skill: item, info: result.conflict })
-            return
-          }
+          const result = await api(operation.route, { allowFailure: true, body })
+          if (!result.ok && result.code === 'name-conflict') { setConflict({ ...operation, info: result.conflict }); return }
           if (!result.ok) {
-            pushToast(result.code === 'protection-required' ? t('protectionRequired') : result.message ?? result.error ?? t('noneLine'))
+            if (result.compatibility) {
+              const update = items => items.map(item => keyOf(kind, item) === key ? { ...item, compatibility: result.compatibility } : item)
+              if (kind === 'remote') setRemoteSkills(update); else setSkills(update)
+            }
+            const failed = installFailure(result, t)
+            setFailures(current => ({ ...current, [key]: { ...operation, message: failed.message } }))
             return
           }
-          const shown = result.displayName || result.name
+          const shown = result.displayName || result.name || candidate.name
           pushToast(`${t('remoteInstalled', { name: shown })} ✓`)
           if (result.renamedFrom) pushToast(t('renamedTo', { name: shown }))
+          if (kind === 'remote') setRemoteSkills(current => current.filter(item => item.id !== candidate.id))
+          else setSkills(current => current.map(item => item.name === candidate.name ? { ...item, installed: true } : item))
           onInstalled?.()
-          setRemoteSkills(current => current.filter(entry => entry.id !== item.id))
-        } catch (err) {
-          pushToast(actionMessage(err, t))
-        } finally {
-          setRemoteBusy(current => ({ ...current, [item.id]: false }))
-        }
+        } catch (err) { setFailures(current => ({ ...current, [key]: { ...operation, message: actionMessage(err, t) } })) }
+        finally { setBusy(current => ({ ...current, [key]: false })) }
       }
-
-      return h('div', { className: 'sd-page-inner' },
+      const install = (kind, candidate, consent) => {
+        if (!sessionId) { onFix?.(candidate); pushToast(t('reviewSessionHint')); return }
+        const compatibility = compatibilityView(candidate, t)
+        if (compatibility.status === 'blocked' || (compatibility.status === 'unknown' && consent !== true)) return
+        const body = { ...(kind === 'remote' ? { id: candidate.id } : { name: candidate.name, origin: 'market' }), workspace, sessionId,
+          ...(consent === true ? { compatibilityConsent: true } : {}) }
+        return run({ kind, candidate, route: kind === 'remote' ? '/remote/install' : '/install', body })
+      }
+      const resolveConflict = mode => {
+        const operation = conflict
+        if (!operation) return
+        setConflict(null)
+        if (mode === 'cancel') { pushToast(t('conflictCancelled')); return }
+        return run({ ...operation, body: { ...operation.body, ...skillSelector(operation.info), conflict: mode } })
+      }
+      const searchRemote = async () => {
+        if (!query.trim() || remoteState === 'loading') return
+        setRemoteState('loading'); setRemoteError('')
+        try {
+          const result = await api('/remote/search', { body: { query: query.trim() } })
+          setRemoteSkills(Array.isArray(result.skills) ? result.skills : []); setRemoteState('ok')
+        } catch (err) { setRemoteError(actionMessage(err, t)); setRemoteState('error') }
+      }
+      const filtered = skills.filter(item => `${item.name} ${item.description || ''}`.toLowerCase().includes(query.trim().toLowerCase()))
+      const renderCandidate = (candidate, kind) => {
+        const key = keyOf(kind, candidate)
+        return h('div', { className: 'sd-card', key },
+          h('div', { className: 'sd-card-head' }, h('div', { className: 'sd-icon' }, kind === 'remote' ? '🌐' : skillEmoji(candidate.name)),
+            h('div', null, h('div', { className: 'sd-card-name' }, candidate.name), h('div', { className: 'sd-meta' }, candidate.repo || candidate.category || ''))),
+          h('div', { className: 'sd-card-desc' }, candidate.description || ''),
+          candidate.installed ? h(React.Fragment, null, h(CompatibilityInfo, { candidate, t }), h('span', null, `✓ ${t('installed')}`))
+            : h(CompatibilityAction, { key: `${key}:${sessionId}:${workspace}`, candidate, sessionId, workspace, t, busy: busy[key], label: busy[key] ? t('installing') : t('install'),
+              onProceed: (consent, effective) => install(kind, effective, consent), onFix: () => onFix?.(candidate) }),
+          failures[key] ? h(TaskFailure, { failure: failures[key], t, busy: busy[key], onRetry: () => run(failures[key]), onFix }) : null,
+          h('div', { className: 'sd-card-foot' }, (kind === 'market'
+            ? [candidate.source || t('catalogSource'), candidate.author]
+            : [candidate.installsLabel, candidate.author]).filter(Boolean).join(' · ')),
+        )
+      }
+      return h('div', { className: 'sd-page-inner sd-market-page' },
         h('div', { className: 'sd-topbar' },
           h('button', { className: 'sd-back', type: 'button', title: t('back'), onClick: onBack }, iconBack(16)),
-          h('span', { className: 'sd-title' }, t('marketTitle')),
-          h('span', { className: 'sd-sub' }, t('marketSource')),
-          h('span', { className: 'sd-spacer' }),
-        ),
-        error ? h('div', { className: 'sd-sub', style: { color: '#c9a96a', paddingBottom: 10 } }, error) : null,
+          h('span', { className: 'sd-title' }, t('marketTitle')), h('span', { className: 'sd-sub' }, t('marketSource'))),
+        error ? h('div', { role: 'alert' }, error) : null,
         h('div', { className: 'sd-market-search-row' },
-          h('input', {
-            className: 'sd-search',
-            placeholder: t('marketSearch'),
-            value: query,
-            onChange: event => setQuery(event.target.value),
-            'aria-label': t('marketSearch'),
-          }),
-          h('button', {
-            className: 'sd-btn', type: 'button',
-            disabled: remoteState === 'loading' || query.trim() === '',
-            onClick: searchRemote,
-          }, remoteState === 'loading' ? t('searching') : t('remoteSearch')),
-        ),
-        remoteState === 'error' ? h('div', { className: 'sd-hint', style: { marginBottom: 12 } }, `${t('remoteError')}${remoteError}`) : null,
+          h('input', { className: 'sd-search', placeholder: t('marketSearch'), value: query, onChange: event => setQuery(event.target.value), 'aria-label': t('marketSearch') }),
+          h('button', { className: 'sd-btn', type: 'button', disabled: remoteState === 'loading' || !query.trim(), onClick: searchRemote }, remoteState === 'loading' ? t('searching') : t('remoteSearch'))),
+        remoteError ? h('div', { role: 'alert' }, `${t('remoteError')}${remoteError}`) : null,
         conflict ? h('div', { className: 'sd-conflict' },
           h('div', { className: 'sd-conflict-title' }, t('conflictTitle')),
-          h('div', { className: 'sd-hint' },
-            t('conflictBody', {
-              name: conflict.info?.displayName || conflict.info?.name || '',
-              scope: scopeLabel(conflict.info?.scope, t),
-            })),
+          h('div', { className: 'sd-hint' }, t('conflictBody', { name: conflict.info?.displayName || conflict.info?.name || '', scope: scopeLabel(conflict.info?.scope, t) })),
           h('div', { className: 'sd-conflict-actions' },
-            conflict.info?.canOverwrite !== false
-              ? h('button', { className: 'sd-btn primary', type: 'button', onClick: () => resolveConflict('overwrite') }, t('overwriteInstall'))
-              : null,
+            conflict.info?.canOverwrite !== false ? h('button', { className: 'sd-btn primary', type: 'button', onClick: () => resolveConflict('overwrite') }, t('overwriteInstall')) : null,
             h('button', { className: 'sd-btn', type: 'button', onClick: () => resolveConflict('rename') }, t('renameInstall')),
-            h('button', { className: 'sd-btn', type: 'button', onClick: () => resolveConflict('cancel') }, t('cancel')),
-          ),
-        ) : null,
-        remoteSkills.length > 0 ? h('div', { className: 'sd-group' },
-          h('div', { className: 'sd-group-title' }, `${t('remoteResults')} (${remoteSkills.length})`),
-          remoteSkills.map(item => h('div', { key: item.id, className: 'sd-row' },
-            h('div', { className: 'sd-icon' }, '🌐'),
-            h('div', { className: 'sd-main' },
-              h('div', { className: 'sd-name-line' },
-                h('span', { className: 'sd-name' }, item.name),
-                h('span', { className: 'sd-ver' }, item.repo),
-              ),
-              h('div', { className: 'sd-meta' }, `${item.installsLabel} · skills.sh`),
-            ),
-            h('div', { className: 'sd-actions' },
-              h('button', {
-                className: 'sd-btn primary', type: 'button',
-                disabled: !sessionId || remoteBusy[item.id] === true,
-                onClick: () => installRemoteSkill(item),
-              }, remoteBusy[item.id] === true ? t('installing') : t('install')),
-            ),
-          )),
-        ) : null,
-        h('div', { className: 'sd-markets' },
-          visible.map(skill => {
-            const state = phase[skill.name]
-            const installed = skill.installed || state === 'done'
-            return h('div', { key: skill.name, className: 'sd-card' },
-              h('div', { className: 'sd-card-head' },
-                h('div', { className: 'sd-icon' }, skillEmoji(skill.name)),
-                h('div', null,
-                  h('div', { className: 'sd-card-name' }, skill.name),
-                  h('div', { style: { color: '#5d6169', fontSize: 11 } }, `v${skill.version} · ${skill.category}`),
-                ),
-              ),
-              h('div', { className: 'sd-card-desc' }, skill.description),
-              failures[skill.name] ? h('div', { style: { color: '#ff8080', fontSize: 11, lineHeight: 1.5 } }, failures[skill.name]) : null,
-              h('div', { className: 'sd-card-foot' },
-                h('span', null, `${skill.installsLabel} · ${skill.author}`),
-                installed
-                  ? h('span', { style: { color: '#35e0d2', marginLeft: 'auto', fontSize: 12 } }, `✓ ${t('installed')}`)
-                  : h('button', {
-                    className: 'sd-btn primary', type: 'button', disabled: !sessionId || busy[skill.name],
-                    onClick: () => install(skill),
-                  }, state === 'auditing' ? t('auditing') : state === 'installing' ? t('installing') : t('install')),
-              ),
-            )
-          }),
-        ),
-        filtered.length === 0
-          ? h('div', { className: 'sd-empty' }, t('marketEmpty'))
-          : h('div', { className: 'sd-more-wrap' },
-            hasMore
-              ? h('button', {
-                className: 'sd-btn',
-                type: 'button',
-                onClick: () => setVisibleCount(current => current + MARKET_PAGE_SIZE),
-              }, t('loadMore', { shown: visible.length, total: filtered.length }))
-              : h('div', { className: 'sd-more-done' }, t('allLoaded', { n: filtered.length })),
-          ),
+            h('button', { className: 'sd-btn', type: 'button', onClick: () => resolveConflict('cancel') }, t('cancel')))) : null,
+        remoteSkills.length ? h('div', { className: 'sd-group' }, h('div', { className: 'sd-group-title' }, t('remoteResults')), h('div', { className: 'sd-markets' }, remoteSkills.map(item => renderCandidate(item, 'remote')))) : null,
+        h('div', { className: 'sd-markets' }, filtered.slice(0, visibleCount).map(item => renderCandidate(item, 'market'))),
+        !filtered.length ? h('div', { className: 'sd-empty' }, t('marketEmpty')) : null,
+        filtered.length > visibleCount ? h('button', { className: 'sd-btn', type: 'button', onClick: () => setVisibleCount(count => count + MARKET_PAGE_SIZE) }, t('loadMore', { shown: visibleCount, total: filtered.length })) : null,
       )
     }
 
@@ -2149,15 +2334,20 @@ window.__ModuleLoader__.load({
       const [query, setQuery] = useState('')
       const [filter, setFilter] = useState('all')
       const [view, setView] = useState('list')
+      const [marketQuery, setMarketQuery] = useState('')
       const [deleting, setDeleting] = useState(null)
       const [detail, setDetail] = useState(null)
       const [settingsOpen, setSettingsOpen] = useState(false)
       const [updatesOpen, setUpdatesOpen] = useState(false)
       const [busy, setBusy] = useState(false)
-      const [replacing, setReplacing] = useState('')
+      const replacing = ''
       const [overlayStatus, setOverlayStatus] = useState(null)
       const [scanning, setScanning] = useState(false)
       const [openBundles, setOpenBundles] = useState({})
+      const [preflight, setPreflight] = useState(null)
+      const [fixTarget, setFixTarget] = useState(null)
+      const [preflightFocus, setPreflightFocus] = useState(0)
+      const [taskFailure, setTaskFailure] = useState(null)
       const [toasts, pushToast] = useToasts()
       const loadRequest = useRef(0)
 
@@ -2186,8 +2376,10 @@ window.__ModuleLoader__.load({
         if (explicitSessionId) setCurrentSessionId(explicitSessionId)
       }, [explicitSessionId])
 
-      const workspace = data?.workspace ?? ''
-      const sessionId = data?.sessionAvailable === true && data?.sessionId === currentSessionId ? currentSessionId : ''
+      const workspace = data?.workspace ?? preflight?.workspace ?? ''
+      const sessionId = (data?.sessionAvailable === true && data?.sessionId === currentSessionId)
+        || (preflight?.session?.available === true && preflight?.session?.id === currentSessionId) ? currentSessionId : ''
+      const choices = Array.isArray(preflight?.sessions) ? preflight.sessions : data?.sessions ?? []
       const sessionPicker = h('div', { className: 'sd-srow', style: { padding: '8px 18px', flexWrap: 'wrap' } },
         h('label', { htmlFor: 'sd-review-session' }, t('reviewSession')),
         h('select', {
@@ -2195,12 +2387,29 @@ window.__ModuleLoader__.load({
           'aria-label': t('reviewSession'), onChange: event => setCurrentSessionId(event.target.value),
         },
           h('option', { value: '' }, t('chooseSession')),
-          (data?.sessions ?? []).map(session => h('option', { key: session.id, value: session.id }, session.title || t('chooseSession'))),
+          choices.map(session => h('option', { key: session.id, value: session.id }, session.title || t('chooseSession'))),
         ),
         !sessionId ? h('span', { className: 'sd-hint' }, t('reviewSessionHint')) : null,
       )
 
-      const protectionControls = h(ProtectionControls, { sessionId, protection: data?.protection, onChanged: load, t })
+      const locateFix = target => {
+        setFixTarget(target || null); setPreflightFocus(value => value + 1)
+        try { document.getElementById('sd-preflight')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) } catch {}
+      }
+      const protectionControls = h(ProtectionControls, { sessionId, protection: preflight?.protection || data?.protection,
+        onChanged: () => { load(); setPreflightFocus(value => value + 1) }, t })
+      const preparation = h(PreflightPanel, { sessionId: currentSessionId, workspace, selector: fixTarget, t, sessionPicker, protectionControls,
+        focus: preflightFocus, onResult: setPreflight, onChanged: load,
+        onSkillAction: async (type, target) => {
+          if (type === 'check-compatibility') {
+            if (!sessionId) { pushToast(t('reviewSessionHint')); return }
+            try {
+              const result = await api('/compatibility', { body: { ...skillSelector(target), ...(target.id ? { id: target.id } : {}), workspace, sessionId } })
+              setFixTarget({ ...target, compatibility: result.compatibility }); setPreflightFocus(value => value + 1)
+              if (!target.id) { setData(current => current ? { ...current, installed: (current.installed ?? []).map(item => skillKey(item) === skillKey(target) ? { ...item, compatibility: result.compatibility } : item) } : current) }
+            } catch (err) { pushToast(actionMessage(err, t)) }
+          } else if (!target.id) setDetail(target)
+        } }, sessionPicker)
       const installed = useMemo(() => data?.installed ?? [], [data])
       const counts = useMemo(() => {
         const out = { plugin: 0, market: 0, learned: 0, scan: 0, user: 0 }
@@ -2273,18 +2482,25 @@ window.__ModuleLoader__.load({
         }
       }
 
-      const toggle = async skill => {
+      const runToggle = async operation => {
         if (busy) return
-        setBusy(true)
+        setBusy(true); setTaskFailure(null)
         try {
-          await api('/toggle', { body: { ...skillSelector(skill), enabled: !skill.enabled, workspace, sessionId } })
-          pushToast(skill.enabled ? t('toastDisabled', { name: skill.name }) : t('toastEnabled', { name: skill.name }))
+          await api('/toggle', { body: operation.body })
+          pushToast(operation.body.enabled ? t('toastEnabled', { name: operation.candidate.name }) : t('toastDisabled', { name: operation.candidate.name }))
           load()
         } catch (err) {
+          setTaskFailure({ ...operation, message: actionMessage(err, t) })
           pushToast(actionMessage(err, t))
         } finally {
           setBusy(false)
         }
+      }
+      const toggle = (skill, consent = false) => {
+        const compatibility = compatibilityView(skill, t)
+        if (!skill.enabled && (compatibility.status === 'blocked' || (compatibility.status === 'unknown' && consent !== true))) { locateFix(skill); return }
+        return runToggle({ candidate: skill, body: { ...skillSelector(skill), enabled: !skill.enabled, workspace, sessionId,
+          ...(!skill.enabled && consent === true ? { compatibilityConsent: true } : {}) } })
       }
 
       const askDelete = (skill, action) => {
@@ -2301,20 +2517,9 @@ window.__ModuleLoader__.load({
         }
       }
 
-      const replaceSkill = async skill => {
-        if (replacing !== '') return
-        setReplacing(skillKey(skill))
-        setOverlayStatus({ kind: 'loading', text: t('replaceSearching') })
-        try {
-          const result = await api('/replace', { body: { ...skillSelector(skill), workspace, sessionId } })
-          setOverlayStatus({ kind: 'ok', text: t('replaceInstalled', { name: result.name }) })
-          load()
-        } catch (err) {
-          setOverlayStatus({ kind: 'none', text: actionMessage(err, t) || t('replaceNone') })
-        } finally {
-          setReplacing('')
-          setTimeout(() => setOverlayStatus(null), 1900)
-        }
+      const replaceSkill = skill => {
+        setMarketQuery(skill.category || skill.name || '')
+        setView('market')
       }
 
       const removeRecord = async skill => {
@@ -2339,6 +2544,7 @@ window.__ModuleLoader__.load({
         onToggle: toggle,
         onAskDelete: askDelete,
         onReplace: replaceSkill,
+        sessionId, workspace, onFix: locateFix,
       })
 
       const openRoot = async () => {
@@ -2350,7 +2556,7 @@ window.__ModuleLoader__.load({
       }
 
       if (error !== '' && data === null) {
-        return h('div', { className: 'sd-page' }, h('style', { key: 'sd-css' }, CSS), h('div', { className: 'sd-page-inner' },
+        return h('div', { className: 'sd-page' }, h('style', { key: 'sd-css' }, CSS), preparation, h('div', { className: 'sd-page-inner' },
           h('div', { className: 'sd-empty' }, h('b', null, t('loadFail')), error),
         ))
       }
@@ -2358,8 +2564,7 @@ window.__ModuleLoader__.load({
       if (view === 'market') {
         return h('div', { className: 'sd-page' },
           h('style', { key: 'sd-css' }, CSS),
-          sessionPicker,
-          protectionControls,
+          preparation,
           h(MarketView, {
             t,
             workspace,
@@ -2367,6 +2572,8 @@ window.__ModuleLoader__.load({
             pushToast,
             onBack: () => setView('list'),
             onInstalled: load,
+            onFix: locateFix,
+            initialQuery: marketQuery,
           }),
           toasts.map(item => h('div', { key: item.id, className: 'sd-toast' }, item.text)),
         )
@@ -2375,8 +2582,7 @@ window.__ModuleLoader__.load({
       if (view === 'learn') {
         return h('div', { className: 'sd-page' },
           h('style', { key: 'sd-css' }, CSS),
-          sessionPicker,
-          protectionControls,
+          preparation,
           h(LearnView, {
             t,
             workspace,
@@ -2392,9 +2598,9 @@ window.__ModuleLoader__.load({
 
       return h('div', { className: 'sd-page' },
         h('style', { key: 'sd-css' }, CSS),
-        sessionPicker,
-        protectionControls,
+        preparation,
         h('div', { className: 'sd-page-inner' },
+          taskFailure ? h(TaskFailure, { failure: taskFailure, t, busy, onRetry: () => runToggle(taskFailure), onFix: locateFix }) : null,
           h('div', { className: 'sd-topbar' },
             h('span', { className: 'sd-title' }, t('panelTitle')),
             h('span', { className: 'sd-sub' }, t('installedN', { n: installed.length })),
@@ -2641,7 +2847,7 @@ window.__ModuleLoader__.load({
     return {
       inject,
       apply,
-      __test: { api, skillSelector, skillKey, sameWorkspaces, scopeChanges, installFailure, actionMessage, auditView, AuditEvidence, DocumentChecks, ProtectionControls, Row, SettingsModal, DetectiveDock, ManagerPanel, DetailModal, MarketView, LearnView, ApiWarnings, zh, en },
+      __test: { api, skillSelector, skillKey, sameWorkspaces, scopeChanges, installFailure, actionMessage, compatibilityView, CompatibilityInfo, CompatibilityAction, PreflightPanel, RecoverySummary, TaskFailure, auditView, AuditEvidence, DocumentChecks, ProtectionControls, Row, SettingsModal, DetectiveDock, ManagerPanel, DetailModal, UpdatesModal, MarketView, LearnView, ApiWarnings, zh, en },
     }
   },
 })

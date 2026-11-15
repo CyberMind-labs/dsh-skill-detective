@@ -100,6 +100,7 @@ const plain = value => JSON.parse(JSON.stringify(value))
 const flush = () => new Promise(resolve => setImmediate(resolve))
 const skill = (instanceId, workspace = '/work/a') => ({
   name: 'same-skill', instanceId, path: `${workspace}/.dsh/skills/same-skill`, scope: 'workspace', workspace, workspaces: [workspace], managed: true, origin: 'user', enabled: true,
+  compatibility: { status: 'supported', basis: 'full-directory', summary: 'Controlled file recipe' },
 })
 const settings = installed => ({
   installed, workspace: '/work/a', settings: { defaultScope: 'workspace' }, suppressed: [],
@@ -247,7 +248,7 @@ test('global manager explicitly selects a named review session and passes it to 
       const id = new URL(url, 'http://test.local').searchParams.get('sessionId') || ''
       return response({ ok: true, ...settings([skill('one')]), sessionId: id, sessionAvailable: id === 'session-two', sessions: [{ id: 'session-one', title: 'First conversation' }, { id: 'session-two', title: 'Selected conversation' }] })
     }
-    if (url.includes('/market?')) return response({ ok: true, skills: [{ name: 'fixture', description: 'Fixture skill' }] })
+    if (url.includes('/market?')) return response({ ok: true, skills: [{ name: 'fixture', description: 'Fixture skill', compatibility: { status: 'supported' } }] })
     return response({ ok: true, name: 'fixture' })
   })
   const manager = app.mount(app.client.ManagerPanel, { t })
@@ -272,7 +273,9 @@ test('global manager explicitly selects a named review session and passes it to 
   const market = app.mount(app.client.MarketView, { ...marketProps, pushToast() {} })
   market.render()
   await flush()
-  await button(market.render(), 'install').props.onClick()
+  const action = elements(market.render()).find(node => node.type === app.client.CompatibilityAction)
+  const compatibilityAction = app.mount(app.client.CompatibilityAction, action.props)
+  await button(compatibilityAction.render(), 'install').props.onClick()
   assert.equal(calls.find(call => call.url.endsWith('/install')).body.sessionId, 'session-two')
 })
 
@@ -698,4 +701,412 @@ test('dock success and covered acknowledgements clear their original IDs without
     }
     assert.deepEqual(acknowledgements, [{ sessionId: 'session', recommendationId: 'displayed', suppress: false }])
   }
+})
+
+
+test('compatibility labels use explicit evidence, default to unknown, and never claim verified effects', () => {
+  const { client } = createClient(async () => response({ ok: true }))
+  assert.equal(client.compatibilityView({ compatible: true, status: 'supported' }, t).status, 'unknown')
+  assert.equal(client.compatibilityView({ compatibility: { status: 'compatible' } }, t).status, 'unknown')
+  const view = client.CompatibilityInfo({ candidate: { compatibility: { status: 'blocked', summary: 'Requires shell', basis: 'full-directory', requirements: [{ capability: 'shell', status: 'blocked', reason: 'Denied', evidence: [{ path: 'SKILL.md', line: 14, excerpt: 'npm test' }] }] } }, t })
+  assert.ok(elements(view).some(node => node.props['data-compatibility'] === 'blocked'))
+  assert.ok(elements(view).some(node => node.props.children.includes('effectUnverified')))
+  assert.ok(elements(view).some(node => node.type === 'details'))
+  assert.ok(elements(view).some(node => node.props.children.includes('SKILL.md:14 npm test')))
+})
+
+test('unknown compatibility is inspected before a separate explicit restricted trial, without changing tools or protection', async () => {
+  const calls = []
+  const proceeded = []
+  const app = createClient(async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) })
+    return response({ ok: true, compatibility: { status: 'unknown', basis: 'full-directory', summary: 'Unproven workflow' } })
+  })
+  const candidate = { ...skill('chosen'), compatibility: { status: 'unknown', basis: 'metadata-only' } }
+  const controls = app.mount(app.client.CompatibilityAction, { candidate, sessionId: 'explicit-session', workspace: '/work/a', t, onProceed: (consent, effective) => proceeded.push({ consent, effective }) })
+  let view = controls.render()
+  assert.equal(calls.length, 0)
+  assert.equal(elements(view).filter(node => node.type === 'button' && node.props.children.includes('restrictedTrial')).length, 0)
+  await button(view, 'checkCompatibility').props.onClick()
+  assert.deepEqual(calls, [{ url: '/api/dsh-skill-detective/compatibility', body: { ...plain(app.client.skillSelector(candidate)), workspace: '/work/a', sessionId: 'explicit-session' } }])
+  assert.equal(proceeded.length, 0, 'Inspection must not install or consent')
+  view = controls.render()
+  await button(view, 'restrictedTrial').props.onClick()
+  assert.equal(proceeded.length, 1)
+  assert.equal(proceeded[0].consent, true)
+  assert.equal(proceeded[0].effective.instanceId, 'chosen')
+  assert.equal(calls.length, 1)
+})
+
+test('blocked compatibility and failed inspection never expose install or trial controls', async () => {
+  const app = createClient(async () => response({ ok: false, message: 'Download failed' }))
+  const blocked = app.mount(app.client.CompatibilityAction, { candidate: { name: 'blocked', compatibility: { status: 'blocked' } }, sessionId: 's', t, onProceed() { assert.fail('Blocked candidates must not proceed') } })
+  assert.equal(elements(blocked.render()).filter(node => node.type === 'button').length, 0)
+  const unknown = app.mount(app.client.CompatibilityAction, { candidate: { name: 'unknown' }, sessionId: 's', t, onProceed() { assert.fail('Failed inspection must not proceed') } })
+  await button(unknown.render(), 'checkCompatibility').props.onClick()
+  const view = unknown.render()
+  assert.ok(elements(view).some(node => node.props.role === 'alert' && node.props.children.includes('Download failed')))
+  assert.equal(elements(view).filter(node => node.type === 'button' && node.props.children.includes('restrictedTrial')).length, 0)
+})
+
+test('market retry preserves the explicitly confirmed candidate, overwrite instance and consent snapshot', async () => {
+  const calls = []
+  let installs = 0
+  const candidate = { name: 'unknown-market', compatibility: { status: 'unknown', basis: 'metadata-only' } }
+  const existing = { ...skill('overwrite-exact'), name: 'unknown-market', scope: 'global' }
+  const app = createClient(async (url, options) => {
+    const body = options.body ? JSON.parse(options.body) : null
+    calls.push({ url, body })
+    if (url.includes('/market?')) return response({ ok: true, skills: [candidate] })
+    if (url.endsWith('/compatibility')) return response({ ok: true, compatibility: { status: 'unknown', basis: 'catalog-template', summary: 'Unverified custom workflow' } })
+    if (url.endsWith('/install')) {
+      installs += 1
+      if (installs === 1) return response({ ok: false, code: 'name-conflict', conflict: existing })
+      if (installs === 2) return response({ ok: false, code: 'protection-required', message: 'Enable protection' })
+      return response({ ok: true, name: candidate.name })
+    }
+    assert.fail(`Unexpected endpoint ${url}`)
+  })
+  const market = app.mount(app.client.MarketView, { workspace: '/work/a', sessionId: 'selected-session', t, pushToast() {} })
+  market.render(); await flush()
+  const props = elements(market.render()).find(node => node.type === app.client.CompatibilityAction).props
+  const action = app.mount(app.client.CompatibilityAction, props)
+  await button(action.render(), 'checkCompatibility').props.onClick()
+  assert.equal(installs, 0)
+  await button(action.render(), 'restrictedTrial').props.onClick()
+  await button(market.render(), 'overwriteInstall').props.onClick()
+  const failure = elements(market.render()).find(node => node.type === app.client.TaskFailure)
+  assert.ok(failure)
+  assert.equal(failure.props.failure.body.compatibilityConsent, true)
+  assert.equal(failure.props.failure.body.instanceId, existing.instanceId)
+  const retained = plain(failure.props.failure.body)
+  await failure.props.onRetry()
+  const requests = calls.filter(call => call.url.endsWith('/install'))
+  assert.deepEqual(requests[2].body, retained)
+  assert.equal(requests[2].body.sessionId, 'selected-session')
+  assert.equal(calls.filter(call => call.url.endsWith('/protection')).length, 0)
+})
+
+test('remote search results remain unknown until full inspection and blocked results cannot install', async () => {
+  const calls = []
+  const app = createClient(async (url, options) => {
+    const body = options.body ? JSON.parse(options.body) : null
+    calls.push({ url, body })
+    if (url.includes('/market?')) return response({ ok: true, skills: [] })
+    if (url.endsWith('/remote/search')) return response({ ok: true, skills: [{ id: 'owner/repo/remote-skill', name: 'remote-skill' }] })
+    if (url.endsWith('/compatibility')) return response({ ok: true, compatibility: { status: 'blocked', basis: 'full-directory', summary: 'Requires network and shell' } })
+    assert.fail(`Unexpected install or mode change: ${url}`)
+  })
+  const market = app.mount(app.client.MarketView, { workspace: '/work/a', sessionId: 'selected-session', t, pushToast() {} })
+  market.render(); await flush()
+  elements(market.render()).find(node => node.type === 'input').props.onChange({ target: { value: 'remote' } })
+  await button(market.render(), 'remoteSearch').props.onClick()
+  const action = app.mount(app.client.CompatibilityAction, elements(market.render()).find(node => node.type === app.client.CompatibilityAction).props)
+  await button(action.render(), 'checkCompatibility').props.onClick()
+  assert.deepEqual(calls.find(call => call.url.endsWith('/compatibility')).body, { id: 'owner/repo/remote-skill', workspace: '/work/a', sessionId: 'selected-session' })
+  assert.equal(elements(action.render()).filter(node => node.type === 'button').length, 0)
+})
+
+test('preflight lists concrete next steps, keeps configured models untested, and executes no unknown actions or automatic mutations', async () => {
+  const calls = []
+  const app = createClient(async (url, options) => {
+    calls.push({ url, body: options.body ? JSON.parse(options.body) : null })
+    return response({ ok: true, ready: false, session: { id: 's', available: true }, model: { configured: true, tested: false }, checks: [
+      { id: 'model', status: 'unknown', message: 'Not tested', action: { type: 'configure-model', label: 'Configure model' } },
+      { id: 'mode', status: 'action', message: 'PTC unavailable', action: { type: 'choose-native-mode', label: 'Select native' } },
+      { id: 'untrusted', status: 'action', message: 'Foreign action', action: { type: 'run-shell', label: 'Do not render' } },
+    ] })
+  })
+  const panel = app.mount(app.client.PreflightPanel, { sessionId: 's', workspace: '/work/a', t })
+  panel.render(); await flush()
+  let view = panel.render()
+  assert.ok(elements(view).some(node => node.props.children.includes('modelUntested')))
+  assert.equal(elements(view).filter(node => node.type === 'button' && node.props.children.includes('Do not render')).length, 0)
+  button(view, 'Configure model').props.onClick()
+  assert.ok(elements(panel.render()).some(node => node.props.children.includes('configureModelHint')))
+  button(panel.render(), 'Select native').props.onClick()
+  assert.ok(elements(panel.render()).some(node => node.props.children.includes('chooseNativeHint')))
+  assert.equal(calls.length, 1)
+  assert.ok(calls[0].url.includes('sessionId=s'))
+  assert.equal(calls[0].body, null)
+})
+
+test('backup recovery requires a server preview and a separate explicit restore with its exact token', async () => {
+  const calls = []
+  let restored = false
+  const app = createClient(async (url, options) => {
+    const body = options.body ? JSON.parse(options.body) : null
+    calls.push({ url, body })
+    if (url.includes('/preflight?')) return response({ ok: true, ready: false, recovery: { files: [{ id: 'state', label: 'Recommendation state', state: restored ? 'valid' : 'corrupt', backupAvailable: true }] } })
+    if (url.endsWith('/recovery/preview')) return response({ ok: true, canRestore: true, previewToken: 'bound-token', summary: { backupPath: '/profile/state.json.bak', size: 128, modifiedAt: '2026-11-16', original: 'quarantine before replacement' } })
+    if (url.endsWith('/recovery/restore')) { restored = true; return response({ ok: true }) }
+    assert.fail(url)
+  })
+  const panel = app.mount(app.client.PreflightPanel, { sessionId: '', t })
+  panel.render(); await flush()
+  assert.equal(calls.filter(call => call.body).length, 0)
+  await button(panel.render(), 'previewRecovery').props.onClick()
+  const view = panel.render()
+  const summary = elements(view).find(node => node.type === app.client.RecoverySummary)
+  assert.ok(summary)
+  const summaryView = app.client.RecoverySummary(summary.props)
+  assert.ok(elements(summaryView).some(node => node.type === 'dd' && node.props.children.includes('/profile/state.json.bak')))
+  assert.ok(elements(summaryView).some(node => node.type === 'details'), 'Technical recovery fields stay folded')
+  assert.equal(calls.filter(call => call.url.endsWith('/recovery/restore')).length, 0)
+  await button(view, 'restoreBackup').props.onClick()
+  assert.deepEqual(calls.find(call => call.url.endsWith('/recovery/restore')).body, { target: 'state', previewToken: 'bound-token' })
+  assert.ok(elements(panel.render()).some(node => node.props.children.includes('recoveryDone')))
+})
+
+test('failed or stale recovery previews cannot be retried as an unreviewed restore', async () => {
+  let restores = 0
+  const app = createClient(async (url) => {
+    if (url.includes('/preflight?')) return response({ ok: true, ready: false, recovery: { files: [{ id: 'index', state: 'corrupt', backupAvailable: true }] } })
+    if (url.endsWith('/recovery/preview')) return response({ ok: true, canRestore: true, previewToken: 'expired', summary: 'old backup' })
+    if (url.endsWith('/recovery/restore')) { restores += 1; return response({ ok: false, message: 'State changed; preview again' }) }
+    assert.fail(url)
+  })
+  const panel = app.mount(app.client.PreflightPanel, { t })
+  panel.render(); await flush()
+  await button(panel.render(), 'previewRecovery').props.onClick()
+  await button(panel.render(), 'restoreBackup').props.onClick()
+  const view = panel.render()
+  assert.ok(elements(view).some(node => node.props.role === 'alert' && node.props.children.some(child => String(child).includes('State changed'))))
+  assert.equal(elements(view).filter(node => node.type === 'button' && node.props.children.includes('restoreBackup')).length, 0)
+  assert.equal(restores, 1)
+})
+
+test('a corrupt state page still exposes independent preflight and live session selection without guessing a session', async () => {
+  const app = createClient(async () => response({ ok: false, message: 'State JSON damaged' }))
+  const manager = app.mount(app.client.ManagerPanel, { t })
+  manager.render(); await flush()
+  let view = manager.render()
+  let preflight = elements(view).find(node => node.type === app.client.PreflightPanel)
+  assert.ok(preflight)
+  assert.equal(preflight.props.sessionId, '')
+  preflight.props.onResult({ ok: true, workspace: '/work/a', session: { id: '', available: false }, sessions: [{ id: 'live-one', title: 'Repository maintenance · live-one' }] })
+  view = manager.render()
+  const picker = elements(view).find(node => node.type === 'select' && node.props['aria-label'] === 'reviewSession')
+  assert.equal(picker.props.value, '')
+  assert.ok(elements(picker).some(node => node.props.children.includes('Repository maintenance · live-one')))
+  picker.props.onChange({ target: { value: 'live-one' } })
+  manager.render(); await flush()
+  preflight = elements(manager.render()).find(node => node.type === app.client.PreflightPanel)
+  assert.equal(preflight.props.sessionId, 'live-one')
+})
+
+test('blocked and unconfirmed installed skills cannot activate through manager callbacks without explicit consent', async () => {
+  const calls = []
+  const selected = { ...skill('blocked-instance'), enabled: false, compatibility: { status: 'blocked' } }
+  const app = createClient(async (url, options) => {
+    calls.push({ url, body: options.body ? JSON.parse(options.body) : null })
+    return response({ ok: true, ...settings([selected]), sessionId: 's', sessionAvailable: true })
+  })
+  const manager = app.mount(app.client.ManagerPanel, { t, sessionId: 's' })
+  manager.render(); await flush()
+  const row = elements(manager.render()).find(node => node.type === app.client.Row)
+  await row.props.onToggle(selected)
+  await row.props.onToggle({ ...selected, compatibility: { status: 'unknown' } })
+  assert.equal(calls.filter(call => call.url.endsWith('/toggle')).length, 0)
+  const preflight = elements(manager.render()).find(node => node.type === app.client.PreflightPanel)
+  assert.equal(preflight.props.selector.instanceId, 'blocked-instance')
+  await row.props.onToggle({ ...selected, compatibility: { status: 'unknown' } }, true)
+  assert.deepEqual(calls.find(call => call.url.endsWith('/toggle')).body, { ...plain(app.client.skillSelector(selected)), enabled: true, workspace: '/work/a', sessionId: 's', compatibilityConsent: true })
+})
+
+
+test('learning unknown final drafts require a separate explicit trial and retry keeps that exact source and consent', async () => {
+  const calls = []
+  const selected = skill('source-exact')
+  const app = createClient(async (url, options) => {
+    const body = JSON.parse(options.body)
+    calls.push({ url, body })
+    if (body.dryRun) return response({ ok: true, source: { name: selected.name }, peers: [], merged: { name: 'merged', markdown: '# merged', authors: [] }, compatibility: { status: 'unknown', basis: 'full-directory', summary: 'Final draft unverified' }, audit: { poison: false } })
+    return response({ ok: false, code: 'audit-unavailable', message: 'Model unavailable' })
+  })
+  const learning = app.mount(app.client.LearnView, { workspace: '/work/a', sessionId: 'chosen-session', installed: [selected], t, pushToast() {} })
+  let view = learning.render()
+  await elements(view).find(node => node.type === 'button' && String(node.props.className).includes('sd-pick')).props.onClick()
+  view = learning.render()
+  assert.equal(button(view, 'generateMerged').props.disabled, true)
+  await button(view, 'generateMerged').props.onClick()
+  assert.equal(calls.length, 1)
+  await button(view, 'restrictedTrial').props.onClick()
+  const failure = elements(learning.render()).find(node => node.type === app.client.TaskFailure)
+  assert.ok(failure)
+  await failure.props.onRetry()
+  const expected = { ...plain(app.client.skillSelector(selected)), workspace: '/work/a', sessionId: 'chosen-session', compatibilityConsent: true }
+  assert.deepEqual(calls[1].body, expected)
+  assert.deepEqual(calls[2].body, expected)
+})
+
+test('recommendation candidates are inspected before explicit trial and retries keep their chosen identity and consent', async () => {
+  const calls = []
+  const app = createClient(async (url, options) => {
+    const body = options.body ? JSON.parse(options.body) : null
+    calls.push({ url, body })
+    if (url.endsWith('/pending/latest')) return response({ ok: true, sessionId: 'original-session', pending: { id: 'recommendation', kind: 'recommend', label: 'Repository task', need: 'catalog:original', candidates: [{ name: 'original' }] } })
+    if (url.endsWith('/compatibility')) return response({ ok: true, compatibility: { status: 'unknown', basis: 'catalog-template', summary: 'Unverified' } })
+    if (url.endsWith('/install')) return response({ ok: false, code: 'audit-unavailable', message: 'Model unavailable' })
+    assert.fail(url)
+  })
+  const dock = app.mount(app.client.DetectiveDock, { t })
+  dock.render(); await flush()
+  const candidateAction = elements(dock.render()).find(node => node.type === app.client.CompatibilityAction)
+  assert.ok(candidateAction)
+  const action = app.mount(app.client.CompatibilityAction, candidateAction.props)
+  await button(action.render(), 'checkCompatibility').props.onClick()
+  assert.equal(calls.filter(call => call.url.endsWith('/install')).length, 0)
+  await button(action.render(), 'restrictedTrial').props.onClick()
+  await button(dock.render(), 'retry').props.onClick()
+  const requests = calls.filter(call => call.url.endsWith('/install'))
+  assert.deepEqual(requests[0].body, { sessionId: 'original-session', name: 'original', compatibilityConsent: true })
+  assert.deepEqual(requests[1].body, requests[0].body)
+})
+
+test('open search compatibility confirmation switches to the exact returned remote candidate rather than rerunning search', async () => {
+  const calls = []
+  const app = createClient(async (url, options) => {
+    const body = options.body ? JSON.parse(options.body) : null
+    calls.push({ url, body })
+    if (url.endsWith('/pending/latest')) return response({ ok: true, sessionId: 'original-session', pending: { kind: 'recommend', label: 'Open task', need: 'open', searchText: 'repo maintenance' } })
+    if (url === '/api/dsh-skill-detective/install') return response({ ok: false, code: 'compatibility-confirmation-required', candidate: { remoteId: 'owner/repo/exact-skill', name: 'exact-skill', scope: 'workspace' }, compatibility: { status: 'unknown', basis: 'full-directory' } })
+    if (url.endsWith('/compatibility')) return response({ ok: true, compatibility: { status: 'unknown', basis: 'full-directory' } })
+    if (url.endsWith('/remote/install')) return response({ ok: false, code: 'audit-unavailable' })
+    assert.fail(url)
+  })
+  const dock = app.mount(app.client.DetectiveDock, { t })
+  dock.render(); await flush()
+  await button(dock.render(), 'find').props.onClick()
+  const candidateAction = elements(dock.render()).find(node => node.type === app.client.CompatibilityAction)
+  assert.ok(candidateAction)
+  const action = app.mount(app.client.CompatibilityAction, candidateAction.props)
+  await button(action.render(), 'checkCompatibility').props.onClick()
+  await button(action.render(), 'restrictedTrial').props.onClick()
+  assert.equal(calls.filter(call => call.url === '/api/dsh-skill-detective/install').length, 1)
+  assert.deepEqual(calls.find(call => call.url.endsWith('/remote/install')).body, { sessionId: 'original-session', id: 'owner/repo/exact-skill', scope: 'workspace', compatibilityConsent: true })
+})
+
+
+test('scope compatibility failures retain the pending exact move and require inspection and explicit trial before resuming', async () => {
+  const calls = []
+  let moved = 0
+  const selected = skill('scope-exact')
+  const app = createClient(async (url, options) => {
+    const body = JSON.parse(options.body)
+    calls.push({ url, body })
+    if (url.endsWith('/settings')) return response({ ok: true })
+    if (url.endsWith('/compatibility')) return response({ ok: true, compatibility: { status: body.targetScope === 'global' ? 'unknown' : 'supported', basis: 'full-directory' } })
+    if (url.endsWith('/scope')) {
+      moved += 1
+      if (moved === 1) return response({ ok: false, code: 'compatibility-confirmation-required', message: 'Needs explicit trial', compatibility: { status: 'unknown', basis: 'full-directory' } })
+      return response({ ok: true })
+    }
+    assert.fail(url)
+  })
+  const modal = app.mount(app.client.SettingsModal, { data: settings([selected]), sessionId: 'chosen-session', t, onSaved() {}, onClose() {} })
+  const select = elements(modal.render()).find(node => node.type === 'select')
+  select.props.onChange({ target: { value: 'global' } })
+  await button(modal.render(), 'save').props.onClick()
+  const actionProps = elements(modal.render()).find(node => node.type === app.client.CompatibilityAction).props
+  assert.equal(actionProps.candidate.instanceId, selected.instanceId)
+  assert.equal(actionProps.sessionId, 'chosen-session')
+  assert.equal(actionProps.inspectionContext.targetScope, 'global')
+  assert.equal(moved, 1)
+  const action = app.mount(app.client.CompatibilityAction, actionProps)
+  await button(action.render(), 'checkCompatibility').props.onClick()
+  const inspection = calls.find(call => call.url.endsWith('/compatibility')).body
+  assert.equal(inspection.targetScope, 'global')
+  assert.deepEqual(inspection.targetWorkspaces, calls.find(call => call.url.endsWith('/scope')).body.workspaces)
+  assert.equal(moved, 1)
+  await button(action.render(), 'restrictedTrial').props.onClick()
+  const attempts = calls.filter(call => call.url.endsWith('/scope'))
+  assert.deepEqual(attempts[1].body, { ...attempts[0].body, compatibilityConsent: true })
+  assert.equal(attempts[1].body.scope, 'global')
+  assert.equal(attempts[1].body.instanceId, selected.instanceId)
+})
+
+test('compatibility inspection is bound to the intended scope and destination workspaces', async () => {
+  const calls = []
+  const app = createClient(async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) })
+    return response({ ok: true, compatibility: { status: 'unknown', basis: 'full-directory' } })
+  })
+  const props = { candidate: { ...skill('scope-source'), compatibility: { status: 'unknown' } }, sessionId: 'chosen-session', workspace: '/work/a', t,
+    inspectionContext: { targetScope: 'workspace', targetWorkspaces: ['/work/b'] }, onProceed() { assert.fail('Changing the destination must require a fresh check') } }
+  const action = app.mount(app.client.CompatibilityAction, props)
+  await button(action.render(), 'checkCompatibility').props.onClick()
+  assert.ok(button(action.render(), 'restrictedTrial'))
+  props.inspectionContext = { targetScope: 'workspace', targetWorkspaces: ['/work/c'] }
+  assert.equal(elements(action.render()).filter(node => node.type === 'button' && node.props.children.includes('restrictedTrial')).length, 0)
+  await button(action.render(), 'checkCompatibility').props.onClick()
+  assert.deepEqual(calls.map(call => call.body.targetWorkspaces), [['/work/b'], ['/work/c']])
+  assert.ok(calls.every(call => call.body.targetScope === 'workspace' && call.body.instanceId === 'scope-source'))
+})
+
+test('finding an alternative opens an explicitly searched marketplace without an implicit replacement request', async () => {
+  const calls = []
+  const selected = { ...skill('old-skill'), category: 'repository-maintenance', enabled: false }
+  const app = createClient(async (url) => {
+    calls.push(url)
+    return response({ ok: true, ...settings([selected]), sessionId: 'chosen-session', sessionAvailable: true })
+  })
+  const manager = app.mount(app.client.ManagerPanel, { sessionId: 'chosen-session', t })
+  manager.render(); await flush()
+  const row = elements(manager.render()).find(node => node.type === app.client.Row)
+  row.props.onReplace(selected)
+  const market = elements(manager.render()).find(node => node.type === app.client.MarketView)
+  assert.ok(market)
+  assert.equal(market.props.initialQuery, 'repository-maintenance')
+  assert.equal(calls.filter(url => url.endsWith('/replace') || url.endsWith('/install')).length, 0)
+})
+
+test('update suggestions use the same compatibility gate and preserve explicit consent when installation fails', async () => {
+  const calls = []
+  const candidate = { name: 'peer-candidate', compatibility: { status: 'unknown', basis: 'metadata-only' } }
+  const app = createClient(async (url, options) => {
+    const body = options.body ? JSON.parse(options.body) : null
+    calls.push({ url, body })
+    if (url.includes('/updates?')) return response({ ok: true, updates: [{ ...skill('old'), status: 'alternative', suggestion: candidate }] })
+    if (url.endsWith('/compatibility')) return response({ ok: true, compatibility: { status: 'unknown', basis: 'catalog-template' } })
+    if (url.endsWith('/install')) return response({ ok: false, message: 'Review unavailable' })
+    assert.fail(url)
+  })
+  const updates = app.mount(app.client.UpdatesModal, { sessionId: 'chosen-session', workspace: '/work/a', t, pushToast() {} })
+  updates.render(); await flush()
+  const props = elements(updates.render()).find(node => node.type === app.client.CompatibilityAction).props
+  const action = app.mount(app.client.CompatibilityAction, props)
+  await button(action.render(), 'checkCompatibility').props.onClick()
+  assert.equal(calls.filter(call => call.url.endsWith('/install')).length, 0)
+  await button(action.render(), 'restrictedTrial').props.onClick()
+  const failure = elements(updates.render()).find(node => node.type === app.client.TaskFailure)
+  assert.ok(failure)
+  await failure.props.onRetry()
+  const attempts = calls.filter(call => call.url.endsWith('/install'))
+  assert.deepEqual(attempts[0].body, { name: 'peer-candidate', origin: 'market', workspace: '/work/a', sessionId: 'chosen-session', compatibilityConsent: true })
+  assert.deepEqual(attempts[1].body, attempts[0].body)
+})
+
+
+test('marketplace distinguishes built-in template provenance from live remote installation data', async () => {
+  const app = createClient(async url => {
+    if (url.includes('/market?')) return response({ ok: true, skills: [{ name: 'local-template', source: 'catalog/template-source', author: 'Catalog author', installsLabel: 'UNVERIFIED_LOCAL_COUNT' }] })
+    if (url.endsWith('/remote/search')) return response({ ok: true, skills: [{ id: 'owner/repo/remote', name: 'remote', installsLabel: '258 verified remote installs', author: 'Remote author' }] })
+    assert.fail(url)
+  })
+  const market = app.mount(app.client.MarketView, { t, workspace: '/work/a', sessionId: 'chosen-session', pushToast() {} })
+  market.render(); await flush()
+  let view = market.render()
+  assert.equal(view.props.className, 'sd-page-inner sd-market-page', 'Theme-safe styles are limited to the marketplace')
+  const localFoot = elements(view).find(node => node.props.className === 'sd-card-foot')
+  assert.deepEqual(localFoot.props.children, ['catalog/template-source · Catalog author'])
+  assert.equal(localFoot.props.children.some(child => String(child).includes('UNVERIFIED_LOCAL_COUNT')), false)
+  elements(view).find(node => node.type === 'input').props.onChange({ target: { value: 'remote' } })
+  await button(market.render(), 'remoteSearch').props.onClick()
+  view = market.render()
+  assert.ok(elements(view).some(node => node.props.className === 'sd-card-foot' && node.props.children.includes('258 verified remote installs · Remote author')))
+  assert.match(app.client.zh.marketSource, /内置目录候选/)
+  assert.match(app.client.zh.marketSource, /完整目录/)
+  assert.match(app.client.zh.reviewSessionHint, /新会话打开后重新检查/)
+  assert.doesNotMatch(app.client.zh.reviewSessionHint, /发送消息/)
 })

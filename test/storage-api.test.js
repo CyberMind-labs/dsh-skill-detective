@@ -78,7 +78,7 @@ test('state metadata retains instance identity and rejects prototype dictionary 
   assert.equal({}.installedAt, undefined)
 })
 
-test('HTTP routes reject malformed bodies and select exact workspace skill instances', async () => {
+test('HTTP routes reject malformed bodies and select exact workspace skill instances', async t => {
   const workspaceA = join(root, 'workspace-a')
   const workspaceB = join(root, 'workspace-b')
   for (const workspace of [workspaceA, workspaceB]) {
@@ -86,14 +86,24 @@ test('HTTP routes reject malformed bodies and select exact workspace skill insta
     await mkdir(dir, { recursive: true })
     await writeFile(join(dir, 'SKILL.md'), `---\nname: shared-skill\ndescription: "${workspace === workspaceA ? 'A' : 'B'}"\n---\n# Fixture\n`)
   }
-  const events = new Map(), disposers = []
+  const events = new Map(), disposers = [], effectDisposers = new Map()
   let handler
-  const scoped = { effect: fn => fn(), skills: { register: () => () => {} } }
+  const definitions = new Map(['read', 'skill'].map(name => {
+    const field = name === 'skill' ? 'name' : 'file_path'
+    return [name, { name, parameters: { type: 'object', required: [field], properties: { [field]: { type: 'string' } } } }]
+  }))
+  const tools = {
+    get: name => definitions.get(name), modeFor: () => 'native', guard: () => () => {},
+    register(definition) { definitions.set(definition.name, definition); return () => definitions.delete(definition.name) },
+  }
+  const scoped = { effect: fn => fn(), skills: { register: () => () => {} }, get: name => name === 'tools' ? tools : undefined }
+  const agent = { id: 'session-live', session: { id: 'session-live', header: { title: 'HTTP repository fixture', cwd: workspaceB }, seq: 0, eventAt: () => undefined }, ctx: scoped }
   const services = {
-    workingDirectory: { defaultDirectory: workspaceA },
+    tools,
+    workingDirectory: { defaultDirectory: workspaceA, get: session => session?.header?.cwd || workspaceA },
     workspaceRegistry: { list: () => [{ path: workspaceA, title: 'A' }, { path: workspaceB, title: 'B' }] },
     skills: { list: async () => [], register: () => () => {} },
-    agents: { get: id => id === 'session-live' ? { ctx: scoped } : undefined },
+    agents: { get: id => id === 'session-live' ? agent : undefined, list: () => [agent] },
     agentDefaultModel: { currentSelection: () => ({ provider: 'local-fixture', model: 'deterministic-audit' }) },
     llm: {
       listProviders: () => [{ id: 'local-fixture' }],
@@ -105,7 +115,7 @@ test('HTTP routes reject malformed bodies and select exact workspace skill insta
   }
   const ctx = {
     get: name => services[name], logger: { info() {} },
-    effect(fn) { const dispose = fn(); if (typeof dispose === 'function') disposers.push(dispose); return dispose },
+    effect(fn, label) { const dispose = fn(); if (typeof dispose === 'function') { disposers.push(dispose); effectDisposers.set(label, dispose) } return dispose },
     on(name, fn) { if (!events.has(name)) events.set(name, new Set()); events.get(name).add(fn); return () => events.get(name).delete(fn) },
     emit(name, ...args) { for (const fn of events.get(name) ?? []) fn(...args) },
     inject(_names, fn) { return fn(ctx) },
@@ -163,6 +173,106 @@ test('HTTP routes reject malformed bodies and select exact workspace skill insta
     assert.ok(mismatch.status >= 400 || mismatch.body.ok === false)
     const unavailable = (await request(`/state?workspace=${encodeURIComponent(workspaceB)}&sessionId=missing`)).body
     assert.equal(unavailable.sessionAvailable, false)
+
+    let capturedService
+    await t.test('HTTP mutations forward only literal compatibility consent and retain exact selector context', async subtest => {
+      const protectedSession = await request('/protection', { sessionId: 'session-live', enabled: true, mode: 'read-only' })
+      assert.equal(protectedSession.body.ok, true, JSON.stringify(protectedSession.body))
+      assert.equal(protectedSession.body.protection.mode, 'read-only')
+      const calls = []
+      for (const method of ['install', 'installRemote', 'learn', 'toggle', 'moveSkill', 'replace', 'learnAll']) {
+        subtest.mock.method(__test.SkillDetective.prototype, method, async function (...args) {
+          capturedService = this
+          calls.push({ method, args })
+          return { ok: true, name: 'fixture', learned: 0, skipped: 0 }
+        })
+      }
+      const routes = [
+        { route: '/install', method: 'install', body: { ...selector, origin: 'market' }, options: args => args[0] },
+        { route: '/remote/install', method: 'installRemote', body: { ...selector, id: 'owner/repository/fixture', scope: 'workspace' }, options: args => args[3] },
+        { route: '/learn', method: 'learn', body: { ...selector }, options: args => args[2] },
+        { route: '/toggle', method: 'toggle', body: { ...selector, enabled: true }, options: args => args[3] },
+        { route: '/scope', method: 'moveSkill', body: { ...selector, scope: 'global', workspaces: [workspaceB] }, options: args => args[5] },
+        { route: '/replace', method: 'replace', body: { ...selector }, options: args => args[2] },
+        { route: '/learn-all', method: 'learnAll', body: { workspace: workspaceB, sessionId: 'session-live' }, options: args => args[1] },
+      ]
+      for (const spec of routes) {
+        for (const value of [undefined, 'true', true]) {
+          const body = { ...spec.body, ...(value === undefined ? {} : { compatibilityConsent: value }) }
+          const result = await request(spec.route, body)
+          assert.equal(result.body.ok, true, `${spec.route}: ${JSON.stringify(result.body)}`)
+          const call = calls.at(-1)
+          assert.equal(call.method, spec.method)
+          assert.equal(spec.options(call.args).compatibilityConsent, value === true, `${spec.route} must not infer consent from omission or strings`)
+          if (spec.method !== 'moveSkill') assert.equal(spec.options(call.args).sessionId, 'session-live')
+          else { assert.equal(call.args[4], 'session-live'); assert.equal(call.args[1], 'global') }
+          if (spec.method !== 'install' && spec.method !== 'installRemote' && spec.method !== 'learnAll') {
+            assert.equal(call.args[0].instanceId, selector.instanceId)
+            assert.equal(call.args[0].path, selector.path)
+          }
+          if (spec.method === 'installRemote') { assert.equal(call.args[0], 'owner/repository/fixture'); assert.equal(call.args[3].instanceId, selector.instanceId) }
+        }
+      }
+      assert.equal(calls.length, routes.length * 3)
+    })
+
+    await t.test('HTTP preflight and fixed-target recovery remain reachable when the primary state is corrupt', async () => {
+      assert.ok(capturedService)
+      // The module binds DSH_HOME at import. Reuse this one serial HTTP fixture
+      // and stop only its background scans before temporarily corrupting state.
+      effectDisposers.get('skill-detective: initial skill scan')?.()
+      effectDisposers.get('skill-detective: rescan on skills change')?.()
+      const file = join(process.env.DSH_HOME, 'skill-detective.json')
+      const backupFile = `${file}.bak`, before = await readFile(file)
+      const corrupt = Buffer.from('{HTTP_STATE_CORRUPTION\n')
+      const arbitraryPath = join(root, 'never-a-recovery-target.json')
+      await writeFile(arbitraryPath, 'PRESERVE_ARBITRARY_FILE')
+      await writeFile(backupFile, before)
+      await writeFile(file, corrupt)
+      capturedService.state.data = null
+      try {
+        const failedState = await request(`/state${query}`)
+        assert.equal(failedState.status, 409)
+        assert.equal(failedState.body.error.code, 'state-corrupt')
+        const preflight = await request(`/preflight${query}`)
+        assert.equal(preflight.status, 200)
+        assert.equal(preflight.body.ok, true)
+        assert.equal(preflight.body.ready, false)
+        assert.ok(preflight.body.sessions.some(item => item.id === 'session-live'))
+        const storage = preflight.body.checks.find(item => item.id === 'storage-state')
+        assert.equal(storage.status, 'blocked')
+        assert.deepEqual(storage.action, { type: 'preview-recovery', label: '预览备份恢复', target: 'state' })
+        assert.equal(preflight.body.recovery.files.find(item => item.id === 'state').backupAvailable, true)
+
+        const invalidTarget = await request('/recovery/preview', { target: arbitraryPath })
+        assert.ok(invalidTarget.status >= 400 && invalidTarget.status < 500)
+        assert.equal(invalidTarget.body.error.code, 'invalid-recovery-target')
+        const preview = await request('/recovery/preview', { target: 'state', path: arbitraryPath, backupPath: arbitraryPath })
+        assert.equal(preview.body.ok, true)
+        assert.equal(preview.body.canRestore, true)
+        assert.equal(preview.body.summary.path, file)
+        assert.equal(preview.body.summary.backup.path, backupFile)
+        assert.deepEqual(await readFile(file), corrupt, 'Preview must leave corrupt original untouched')
+        assert.equal((await request('/recovery/restore', { target: 'index', previewToken: preview.body.previewToken })).body.error.code, 'recovery-preview-expired')
+        assert.deepEqual(await readFile(file), corrupt)
+
+        const restored = await request('/recovery/restore', { target: 'state', previewToken: preview.body.previewToken, path: arbitraryPath })
+        assert.equal(restored.body.ok, true, JSON.stringify(restored.body))
+        assert.equal(restored.body.recovered, true)
+        assert.equal(restored.body.preservedPath, preview.body.summary.preservedPath)
+        assert.deepEqual(await readFile(restored.body.preservedPath), corrupt)
+        assert.deepEqual(await readFile(file), before)
+        assert.deepEqual(await readFile(backupFile), before)
+        assert.equal(await readFile(arbitraryPath, 'utf8'), 'PRESERVE_ARBITRARY_FILE')
+        const recoveredPreflight = await request(`/preflight${query}`)
+        assert.equal(recoveredPreflight.body.recovery.files.find(item => item.id === 'state').state, 'valid')
+        assert.equal((await request('/recovery/restore', { target: 'state', previewToken: preview.body.previewToken })).body.error.code, 'recovery-preview-expired')
+      } finally {
+        // Leave the shared per-file test home valid even if an assertion fails.
+        await writeFile(file, before)
+        capturedService.state.data = null
+      }
+    })
   } finally {
     for (const dispose of disposers.reverse()) await dispose()
     await new Promise(resolve => server.close(resolve))

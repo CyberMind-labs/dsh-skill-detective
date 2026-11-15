@@ -3,6 +3,8 @@ import { resolve, join, isAbsolute } from 'node:path'
 import { createHash } from 'node:crypto'
 import { readSkillSnapshotSync, assessAuditEvidence } from './audit-evidence.js'
 import { attachRuntimePolicy } from './runtime-policy.js'
+import { readRecipeContract } from './file-recipes.js'
+import { planRepoTask } from './repo-task-service.js'
 
 const MODES = new Set(['read-only', 'workspace-write'])
 const identity = path => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path)
@@ -14,7 +16,7 @@ const error = (code, message) => Object.assign(new Error(message), { code, statu
  */
 export function createProtectionService(service, ctx, options) {
   const { store, promptFile, policyVersion, maxAgeMs, controlRoots = [] } = options
-  let controller = null, ready = false, initializationError = '', disposed = false
+  let controller = null, ready = false, initializationError = '', disposed = false, generation = 0
   const preparations = new WeakMap()
 
   function policyOptions() {
@@ -71,7 +73,8 @@ export function createProtectionService(service, ctx, options) {
         return { reason: '宿主实际加载的技能与审查文件不一致' }
       }
     }
-    return { instanceId: record.instanceId, name, fingerprint: snapshot.contentHash,
+    const recipe = readRecipeContract(snapshot.files)
+    return { instanceId: record.instanceId, name, fingerprint: snapshot.contentHash, operations: recipe.ok ? recipe.operations : [],
       readFiles: snapshot.files.map(file => join(record.path, ...file.path.split('/'))),
       path: record.path, evidence }
   }
@@ -113,19 +116,29 @@ export function createProtectionService(service, ctx, options) {
     return {}
   }
 
-  const initialization = Promise.all([store.load(), service.state.load(), service.index.load()]).then(([data]) => {
-    if (data.protections !== undefined && (!data.protections || typeof data.protections !== 'object' || Array.isArray(data.protections))) throw new Error('会话保护状态损坏')
-    if (data.protections) for (const [id, value] of Object.entries(data.protections)) {
-      if (!id || ['__proto__', 'prototype', 'constructor'].includes(id) || !value || value.enabled !== true
-        || !MODES.has(value.mode) || typeof value.workspace !== 'string' || !isAbsolute(value.workspace)) throw new Error('会话保护记录损坏')
+  async function initialize(expectedGeneration) {
+    try {
+      const [data] = await Promise.all([store.load(), service.state.load(), service.index.load()])
+      if (data.protections !== undefined && (!data.protections || typeof data.protections !== 'object' || Array.isArray(data.protections))) throw new Error('会话保护状态损坏')
+      if (data.protections) for (const [id, value] of Object.entries(data.protections)) {
+        if (!id || ['__proto__', 'prototype', 'constructor'].includes(id) || !value || value.enabled !== true
+          || !MODES.has(value.mode) || typeof value.workspace !== 'string' || !isAbsolute(value.workspace)) throw new Error('会话保护记录损坏')
+      }
+      if (!disposed && expectedGeneration === generation) { initializationError = ''; ready = true }
+    } catch (cause) {
+      if (expectedGeneration === generation) { ready = false; initializationError = `保护状态无法恢复，所有工具调用暂缓执行：${cause.message}` }
+      service.log?.(`skill-detective: protection initialization failed: ${cause.message}`)
     }
-    ready = true
-  }).catch(cause => { initializationError = `保护状态无法恢复，所有工具调用暂缓执行：${cause.message}`; service.log?.(`skill-detective: protection initialization failed: ${cause.message}`) })
+  }
+  const initialization = initialize(generation)
+  let reloadQueue = initialization
 
   ctx.inject(['tools'], scope => {
     if (disposed) return
     controller = attachRuntimePolicy(scope, { getPolicy, isReady: () => ready && !initializationError,
-      prepareSkill, authorizeSkill, validateActiveSkills, controlRoots, writeDenyRoots: controlRoots })
+      prepareSkill, authorizeSkill, validateActiveSkills, controlRoots, writeDenyRoots: controlRoots,
+      fileTaskDefinition: service.repoTasks?.definition,
+      authorizeFileTask: (exec, records, context) => planRepoTask(exec.arguments, records, context, controlRoots) })
     scope.effect?.(() => () => { controller?.dispose(); controller = null }, 'skill-detective: tool protection')
   })
 
@@ -147,7 +160,7 @@ export function createProtectionService(service, ctx, options) {
   }
 
   async function set(sessionId, enabled, mode = 'read-only') {
-    await initialization
+    await reloadQueue
     if (!service.validSessionId(sessionId)) throw error('session-unavailable', '请选择一个有效会话')
     if (initializationError) throw error('protection-unavailable', initializationError)
     if (typeof enabled !== 'boolean' || !MODES.has(mode)) throw error('invalid-protection', '保护状态或模式不合法')
@@ -167,5 +180,22 @@ export function createProtectionService(service, ctx, options) {
     return { ok: true, protection: status(sessionId) }
   }
 
-  return { initialization, status, requireProtected, set, dispose() { disposed = true; controller?.dispose(); controller = null } }
+  function reload() {
+    const requestedGeneration = ++generation
+    // Close synchronously, including while the original startup read is pending.
+    // Older readers finish before caches are discarded and cannot publish ready.
+    ready = false; initializationError = ''
+    const run = reloadQueue.catch(() => {}).then(async () => {
+      const ids = Object.keys(store.data?.protections || {})
+      store.data = null; service.state.data = null; service.index.data = null
+      for (const id of ids) controller?.clearSession(id)
+      await initialize(requestedGeneration)
+      for (const id of Object.keys(store.data?.protections || {})) controller?.clearSession(id)
+      if (requestedGeneration === generation && initializationError) throw error('protection-unavailable', initializationError)
+    })
+    reloadQueue = run.catch(() => {})
+    return run
+  }
+  return { initialization, status, requireProtected, set, reload, checkFileTask(exec) { requireProtected(exec.agent?.session?.id); return controller.checkFileTask(exec) },
+    dispose() { disposed = true; controller?.dispose(); controller = null } }
 }

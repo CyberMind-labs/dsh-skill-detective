@@ -137,3 +137,30 @@ test('actual scoped skills service works when Cordis rejects direct property inj
   await f.protection.set('live', true)
   assert.equal(await f.call('skill', { name: 'fixture' }), null)
 })
+
+test('overlapping initial load and recovery never publish stale ready protection', async () => {
+  const root = await mkdtemp(join(artifacts, 'protection-reload-')), workspace = join(root, 'workspace')
+  await mkdir(workspace)
+  const first = Promise.withResolvers(), second = Promise.withResolvers()
+  let reads = 0, guard
+  const store = { data: null, async load() { const result = await (++reads === 1 ? first.promise : second.promise); this.data = result; return result } }
+  const agent = { id: 'protected', session: { id: 'protected', header: { cwd: workspace }, seq: 0, eventAt: () => undefined } }
+  const tools = { get: () => undefined, modeFor: () => 'native', guard: callback => { guard = callback; return () => { guard = undefined } } }
+  const scope = { tools, on: () => () => {}, get: name => name === 'agents' ? { get: () => agent } : undefined, effect: () => {} }
+  const ctx = { inject(_dependencies, callback) { callback(scope) }, get: scope.get }
+  const service = { ctx, state: { data: {}, async load() { return this.data } }, index: { data: { skills: {} }, async load() { return this.data } }, validSessionId: value => value, log() {} }
+  const protection = createProtectionService(service, ctx, { store, promptFile: join(root, 'unused-prompt.md'), policyVersion: 'test', maxAgeMs: 1_000 })
+  const reload = protection.reload()
+  try {
+    assert.match(guard({ name: 'bash', arguments: {}, agent }) || '', /恢复会话保护状态/)
+    first.resolve({})
+    await protection.initialization
+    // Recovery's second read is still pending. The old initializer must not
+    // let an unprotected-looking snapshot bypass the global pause.
+    assert.match(guard({ name: 'bash', arguments: {}, agent }) || '', /恢复会话保护状态/)
+  } finally {
+    second.resolve({})
+    await reload
+    protection.dispose()
+  }
+})
