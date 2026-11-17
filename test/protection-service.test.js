@@ -38,16 +38,19 @@ async function fixture(t) {
     return [name, { name, parameters: { type: 'object', required: [field], properties: { [field]: { type: 'string' } } } }]
   }))
   const tools = { get: name => definitions.get(name), modeFor: () => 'native', guard(fn) { guards.push(fn); return () => guards.splice(guards.indexOf(fn), 1) } }
-  const services = { tools, agents: { get: id => id === 'live' ? agent : undefined }, workingDirectory: { get: () => cwd } }
+  const other = { ...agent, id: 'other', session: { ...agent.session, id: 'other' } }
+  const agents = new Map([['live', agent], ['other', other]])
+  const services = { tools, agents: { get: id => agents.get(id) }, workingDirectory: { get: () => cwd } }
   const ctx = { tools, get: name => services[name], inject(names, callback) { if (names.includes('tools')) callback(ctx) },
     effect() {}, on(name, fn) { const list = hooks.get(name) || []; hooks.set(name, [...list, fn]); return () => hooks.set(name, (hooks.get(name) || []).filter(item => item !== fn)) } }
   const state = { installs: { [record.instanceId]: { auditEvidence: evidence } } }, index = { skills: { [record.instanceId]: record } }
   const service = { ctx, state: { data: state, load: async () => state }, index: { data: index, load: async () => index },
-    validSessionId: id => id === 'live' ? id : '', log() {} }
+    validSessionId: id => agents.has(id) ? id : '', log() {} }
   const storeFile = join(home, 'runtime-protection.json')
-  let protection
+  let protection, store
   function attach() {
-    protection = createProtectionService(service, ctx, { store: new __test.JsonStore(storeFile), promptFile, policyVersion, maxAgeMs, controlRoots: [home] })
+    store = new __test.JsonStore(storeFile)
+    protection = createProtectionService(service, ctx, { store, promptFile, policyVersion, maxAgeMs, controlRoots: [home] })
     return protection
   }
   attach(); await protection.initialization
@@ -62,6 +65,7 @@ async function fixture(t) {
     return null
   }
   return { root, workspace, file, skillRoot, promptFile, storeFile, service, call, agent,
+    get store() { return store },
     get protection() { return protection }, attach, lookups, setCwd: value => { cwd = value }, setHostContent: value => { hostContent = value } }
 }
 
@@ -80,6 +84,136 @@ test('protection choices are explicit, durable, workspace-bound and never upgrad
   await assert.rejects(f.protection.set('live', true, 'danger-full-access'), { code: 'invalid-protection' })
   assert.equal((await f.protection.set('live', false)).protection.enabled, false)
   assert.deepEqual(JSON.parse(await readFile(f.storeFile, 'utf8')).protections, {})
+})
+
+function pauseStore(store, method, { fail = false } = {}) {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const original = store[method]
+  let paused = false
+  store[method] = async function (...args) {
+    if (!paused) {
+      paused = true
+      entered.resolve()
+      await release.promise
+      if (fail) throw new Error('fixture storage failure')
+    }
+    return original.apply(this, args)
+  }
+  return { entered: entered.promise, release: () => release.resolve(), restore: () => { store[method] = original } }
+}
+
+test('another session settings read cannot interrupt committed protection or active grants', async t => {
+  const f = await fixture(t)
+  await writeFile(join(f.root, 'outside.txt'), 'outside fixture')
+  await f.protection.set('live', true)
+  assert.equal(await f.call('skill', { name: 'fixture' }), null)
+  const pause = pauseStore(f.store, 'load')
+  const update = f.protection.set('other', true)
+  try {
+    await pause.entered
+    assert.equal(f.store.data, null, 'the actual JsonStore refresh is suspended')
+    assert.equal(f.protection.status('live').enabled, true)
+    assert.equal(await f.call('read', { file_path: 'input.txt' }), null)
+    assert.equal(await f.call('read', { file_path: f.file }), null, 'existing skill grant remains active')
+    assert.match(await f.call('write', { file_path: 'result.txt', content: 'result' }), /只读/)
+    assert.match(await f.call('read', { file_path: join(f.root, 'outside.txt') }), /不在工作区/)
+  } finally { pause.release(); await update; pause.restore() }
+  assert.equal(f.protection.status('live').enabled, true)
+  assert.equal(f.protection.status('other').enabled, true)
+  await writeFile(join(f.skillRoot, 'helper.js'), 'changed')
+  assert.match(await f.call('read', { file_path: 'input.txt' }), /变化|重新审查/)
+})
+
+test('a mode change becomes visible only after its save commits and keeps active grants', async t => {
+  const f = await fixture(t)
+  await f.protection.set('live', true)
+  assert.equal(await f.call('skill', { name: 'fixture' }), null)
+  const pause = pauseStore(f.store, 'save')
+  const update = f.protection.set('live', true, 'workspace-write')
+  try {
+    await pause.entered
+    assert.equal(f.store.data.protections.live.mode, 'workspace-write', 'working cache contains the uncommitted candidate')
+    assert.equal(f.protection.status('live').mode, 'read-only')
+    assert.match(await f.call('write', { file_path: 'result.txt', content: 'result' }), /只读/)
+  } finally { pause.release(); await update; pause.restore() }
+  assert.equal(await f.call('write', { file_path: 'result.txt', content: 'result' }), null)
+  await writeFile(join(f.skillRoot, 'helper.js'), 'changed')
+  assert.match(await f.call('read', { file_path: 'input.txt' }), /变化|重新审查/)
+})
+
+for (const enabled of [false, true]) test(`failed ${enabled ? 'mode relaxation' : 'disable'} preserves protection and loaded grants`, async t => {
+  const f = await fixture(t)
+  await f.protection.set('live', true)
+  assert.equal(await f.call('skill', { name: 'fixture' }), null)
+  const pause = pauseStore(f.store, 'save', { fail: true })
+  const update = f.protection.set('live', enabled, 'workspace-write')
+  const rejected = assert.rejects(update, /fixture storage failure/)
+  try {
+    await pause.entered
+    assert.match(await f.call('write', { file_path: 'result.txt', content: 'result' }), /只读/)
+    assert.equal(await f.call('read', { file_path: f.file }), null)
+  } finally { pause.release(); await rejected; pause.restore() }
+  assert.equal(f.protection.status('live').mode, 'read-only')
+  assert.equal(JSON.parse(await readFile(f.storeFile, 'utf8')).protections.live.mode, 'read-only')
+  await writeFile(join(f.skillRoot, 'helper.js'), 'changed')
+  assert.match(await f.call('read', { file_path: 'input.txt' }), /变化|重新审查/)
+})
+
+test('failed settings refresh retains the last committed policy', async t => {
+  const f = await fixture(t)
+  await f.protection.set('live', true)
+  const pause = pauseStore(f.store, 'load', { fail: true })
+  const rejected = assert.rejects(f.protection.set('other', true), /fixture storage failure/)
+  try {
+    await pause.entered
+    assert.match(await f.call('write', { file_path: 'result.txt', content: 'result' }), /只读/)
+  } finally { pause.release(); await rejected; pause.restore() }
+  assert.equal(f.protection.status('live').enabled, true)
+  assert.equal(f.protection.status('other').enabled, false)
+})
+
+test('settings and reload share commit order while reload keeps dispatch closed', async t => {
+  const f = await fixture(t)
+  await f.protection.set('live', true)
+  const pause = pauseStore(f.store, 'save')
+  const update = f.protection.set('live', true, 'workspace-write')
+  await pause.entered
+  const reload = f.protection.reload()
+  const tighten = f.protection.set('live', true, 'read-only')
+  try {
+    assert.equal(f.protection.status('live').available, false)
+    assert.match(await f.call('read', { file_path: 'input.txt' }), /恢复/)
+  } finally { pause.release(); await update; await reload; await tighten; pause.restore() }
+  assert.equal(f.protection.status('live').mode, 'read-only')
+  assert.equal(JSON.parse(await readFile(f.storeFile, 'utf8')).protections.live.mode, 'read-only')
+  assert.match(await f.call('write', { file_path: 'result.txt', content: 'result' }), /只读/)
+})
+
+test('failed candidate validation cannot create a trusted runtime session', async t => {
+  const f = await fixture(t)
+  // The first dry run sees clean history, then persistence fails.
+  const save = f.store.save
+  f.store.save = async () => { throw new Error('fixture storage failure') }
+  await assert.rejects(f.protection.set('live', true), /fixture storage failure/)
+  f.store.save = save
+  f.agent.session.seq = 1
+  f.agent.session.eventAt = () => ({ type: 'tool/call', data: { name: 'skill' } })
+  await assert.rejects(f.protection.set('live', true), /会话历史/)
+  assert.equal(f.protection.status('live').enabled, false)
+})
+
+test('history changing before a new protection commit is rechecked and fails closed', async t => {
+  const f = await fixture(t)
+  const pause = pauseStore(f.store, 'save')
+  const rejected = assert.rejects(f.protection.set('live', true), /保护选择已保存.*会话历史/)
+  try {
+    await pause.entered
+    f.agent.session.seq = 1
+    f.agent.session.eventAt = () => ({ type: 'tool/call', data: { name: 'skill' } })
+  } finally { pause.release(); await rejected; pause.restore() }
+  assert.equal(JSON.parse(await readFile(f.storeFile, 'utf8')).protections.live.enabled, true)
+  assert.equal(f.protection.status('live').available, false)
+  assert.match(await f.call('read', { file_path: 'input.txt' }), /会话历史/)
 })
 
 test('actual host skill identity must match reviewed bytes and companion edits revoke active grants', async t => {

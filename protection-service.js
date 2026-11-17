@@ -17,7 +17,20 @@ const error = (code, message) => Object.assign(new Error(message), { code, statu
 export function createProtectionService(service, ctx, options) {
   const { store, promptFile, policyVersion, maxAgeMs, controlRoots = [] } = options
   let controller = null, ready = false, initializationError = '', disposed = false, generation = 0
+  let committedPolicies = Object.freeze({})
   const preparations = new WeakMap()
+
+  function policySnapshot(data) {
+    const records = data.protections
+    if (records !== undefined && (!records || typeof records !== 'object' || Array.isArray(records))) throw new Error('会话保护状态损坏')
+    const snapshot = {}
+    for (const [id, value] of Object.entries(records || {})) {
+      if (!id || ['__proto__', 'prototype', 'constructor'].includes(id) || !value || value.enabled !== true
+        || !MODES.has(value.mode) || typeof value.workspace !== 'string' || !isAbsolute(value.workspace)) throw new Error('会话保护记录损坏')
+      snapshot[id] = Object.freeze({ ...value })
+    }
+    return Object.freeze(snapshot)
+  }
 
   function policyOptions() {
     const promptHash = createHash('sha256').update(readFileSync(promptFile, 'utf8')).digest('hex')
@@ -34,7 +47,9 @@ export function createProtectionService(service, ctx, options) {
   }
 
   function getPolicy(sessionId) {
-    const policy = store.data?.protections?.[sessionId]
+    // JsonStore updates clear and mutate their working cache across awaits.
+    // Guards must only see the last successfully committed policy snapshot.
+    const policy = committedPolicies[sessionId]
     if (!policy || policy.enabled !== true || !MODES.has(policy.mode) || typeof policy.workspace !== 'string') return null
     // A policy belongs to this exact workspace, including across host restarts.
     try { if (identity(sessionRoot(sessionId)) !== identity(policy.workspace)) return { ...policy, invalid: true } }
@@ -119,19 +134,20 @@ export function createProtectionService(service, ctx, options) {
   async function initialize(expectedGeneration) {
     try {
       const [data] = await Promise.all([store.load(), service.state.load(), service.index.load()])
-      if (data.protections !== undefined && (!data.protections || typeof data.protections !== 'object' || Array.isArray(data.protections))) throw new Error('会话保护状态损坏')
-      if (data.protections) for (const [id, value] of Object.entries(data.protections)) {
-        if (!id || ['__proto__', 'prototype', 'constructor'].includes(id) || !value || value.enabled !== true
-          || !MODES.has(value.mode) || typeof value.workspace !== 'string' || !isAbsolute(value.workspace)) throw new Error('会话保护记录损坏')
-      }
-      if (!disposed && expectedGeneration === generation) { initializationError = ''; ready = true }
+      const snapshot = policySnapshot(data)
+      if (!disposed && expectedGeneration === generation) { committedPolicies = snapshot; initializationError = ''; ready = true }
     } catch (cause) {
       if (expectedGeneration === generation) { ready = false; initializationError = `保护状态无法恢复，所有工具调用暂缓执行：${cause.message}` }
       service.log?.(`skill-detective: protection initialization failed: ${cause.message}`)
     }
   }
   const initialization = initialize(generation)
-  let reloadQueue = initialization
+  let operationQueue = initialization
+  function enqueue(operation) {
+    const run = operationQueue.then(operation)
+    operationQueue = run.catch(() => {})
+    return run
+  }
 
   ctx.inject(['tools'], scope => {
     if (disposed) return
@@ -159,25 +175,35 @@ export function createProtectionService(service, ctx, options) {
     return current
   }
 
-  async function set(sessionId, enabled, mode = 'read-only') {
-    await reloadQueue
-    if (!service.validSessionId(sessionId)) throw error('session-unavailable', '请选择一个有效会话')
-    if (initializationError) throw error('protection-unavailable', initializationError)
-    if (typeof enabled !== 'boolean' || !MODES.has(mode)) throw error('invalid-protection', '保护状态或模式不合法')
-    if (enabled && !status(sessionId).available) throw error('protection-unavailable', status(sessionId).reason)
-    const workspace = enabled ? sessionRoot(sessionId) : ''
-    await store.update(data => {
-      data.protections ??= {}
-      if (enabled) {
-        data.protections[sessionId] = { enabled: true, mode, workspace, at: Date.now() }
+  function set(sessionId, enabled, mode = 'read-only') {
+    return enqueue(async () => {
+      if (disposed) throw error('protection-unavailable', '会话保护服务已停止')
+      if (!service.validSessionId(sessionId)) throw error('session-unavailable', '请选择一个有效会话')
+      if (initializationError) throw error('protection-unavailable', initializationError)
+      if (typeof enabled !== 'boolean' || !MODES.has(mode)) throw error('invalid-protection', '保护状态或模式不合法')
+      const workspace = enabled ? sessionRoot(sessionId) : ''
+      let candidate
+      await store.update(data => {
+        policySnapshot(data)
+        data.protections ??= {}
+        if (enabled) data.protections[sessionId] = { enabled: true, mode, workspace, at: Date.now() }
+        else delete data.protections[sessionId]
+        candidate = policySnapshot(data)
+        if (enabled) {
+          try { controller.validatePolicy(sessionId, candidate[sessionId]) }
+          catch (cause) { throw error('protection-unavailable', cause.message) }
+        }
+      })
+      committedPolicies = candidate
+      // Loaded instructions remain in history when permissions change. Keep
+      // their grants for revalidation; only a committed disable clears them.
+      if (!enabled) controller?.clearSession(sessionId)
+      else if (ready) {
         try { controller.requireProtected(sessionId) }
-        catch (cause) { throw error('protection-unavailable', cause.message) }
-      } else delete data.protections[sessionId]
+        catch (cause) { throw error('protection-unavailable', `保护选择已保存，但当前无法执行工具：${cause.message}`) }
+      }
+      return { ok: true, protection: status(sessionId) }
     })
-    // Keep loaded-skill evidence when tightening permissions: instructions may
-    // remain in history, so their directory must still be checked on each call.
-    if (!enabled) controller?.clearSession(sessionId)
-    return { ok: true, protection: status(sessionId) }
   }
 
   function reload() {
@@ -185,16 +211,14 @@ export function createProtectionService(service, ctx, options) {
     // Close synchronously, including while the original startup read is pending.
     // Older readers finish before caches are discarded and cannot publish ready.
     ready = false; initializationError = ''
-    const run = reloadQueue.catch(() => {}).then(async () => {
-      const ids = Object.keys(store.data?.protections || {})
+    return enqueue(async () => {
+      const ids = Object.keys(committedPolicies)
       store.data = null; service.state.data = null; service.index.data = null
       for (const id of ids) controller?.clearSession(id)
       await initialize(requestedGeneration)
-      for (const id of Object.keys(store.data?.protections || {})) controller?.clearSession(id)
+      for (const id of Object.keys(committedPolicies)) controller?.clearSession(id)
       if (requestedGeneration === generation && initializationError) throw error('protection-unavailable', initializationError)
     })
-    reloadQueue = run.catch(() => {})
-    return run
   }
   return { initialization, status, requireProtected, set, reload, checkFileTask(exec) { requireProtected(exec.agent?.session?.id); return controller.checkFileTask(exec) },
     dispose() { disposed = true; controller?.dispose(); controller = null } }

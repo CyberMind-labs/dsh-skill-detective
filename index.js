@@ -746,8 +746,9 @@ function modelScore(id, preferred) {
 
 /**
  * One small, fast model call for both the security review and the need router.
- * The Harness owns credentials and routing, so this never handles API keys; the
- * route is resolved once from the live `llm` service and cached for five minutes.
+ * The Harness owns credentials and routing, so this never handles API keys.
+ * Explicit session/default selections are read live. Only model discovery is
+ * cached; one JSON operation snapshots its route, including its bounded retry.
  */
 class ModelJudge {
   constructor(service) {
@@ -761,7 +762,43 @@ class ModelJudge {
     this.cachedAt = 0
   }
 
-  async route() {
+  selection(sessionId) {
+    const ctx = this.service.ctx
+    const copy = (value, includeEffort = true) => {
+      if (typeof value?.provider !== 'string' || value.provider === ''
+        || typeof value?.model !== 'string' || value.model === '') return null
+      return { provider: value.provider, model: value.model,
+        ...(includeEffort && typeof value.reasoningEffort === 'string' && value.reasoningEffort !== ''
+          ? { reasoningEffort: value.reasoningEffort } : {}) }
+    }
+    let agent
+    try { if (typeof sessionId === 'string' && sessionId !== '') agent = ctx.get('agents')?.get?.(sessionId) } catch { /* optional host service */ }
+    if (agent && agent.session?.id === sessionId) {
+      // GUI model switches are durable pending selections before the next
+      // request header is written. Read the whole selection, never mix effort
+      // from another route, another session, or the global default.
+      try {
+        const pending = copy(ctx.get('sessionProjections')?.stateOf?.(agent.session, 'modelSelection')?.pending)
+        if (pending !== null) return pending
+      } catch { /* non-GUI hosts may not have this projection */ }
+      try {
+        const header = agent.session.requestHeader?.()
+        const selected = copy(header?.config, header?.adapterDefaults?.reasoningEffort !== true)
+        if (selected !== null) return selected
+      } catch { /* use this agent's creation options before a logged request */ }
+      try {
+        const created = copy(agent.options)
+        if (created !== null) return created
+      } catch { /* use the live default if creation settings are unavailable */ }
+    }
+    try { return copy(ctx.get('agentDefaultModel')?.currentSelection?.()) } catch { return null }
+  }
+
+  async route(sessionId) {
+    const selection = this.selection(sessionId)
+    if (selection !== null) {
+      try { return await this.resolve(selection) } catch { return null }
+    }
     if (this.cached !== null && Date.now() - this.cachedAt < 5 * 60_000) return this.cached
     if (this.cached === null && this.cachedAt > 0 && Date.now() - this.cachedAt < 30_000) return null
     let resolved = null
@@ -775,7 +812,7 @@ class ModelJudge {
     return resolved
   }
 
-  async resolve() {
+  async resolve(selection = null) {
     const ctx = this.service.ctx
     let llm
     try {
@@ -785,12 +822,7 @@ class ModelJudge {
     }
     if (!llm || typeof llm.stream !== 'function') return null
 
-    let selection = null
-    try {
-      selection = ctx.get('agentDefaultModel')?.currentSelection?.() ?? null
-    } catch {
-      selection = null
-    }
+    if (selection !== null) return { llm, ...selection }
 
     let providers = []
     try {
@@ -801,18 +833,8 @@ class ModelJudge {
     const providerIds = Array.isArray(providers)
       ? providers.map(item => (typeof item?.id === 'string' ? item.id : '')).filter(Boolean)
       : []
-    const preferredProvider = typeof selection?.provider === 'string' ? selection.provider : ''
-    const provider = providerIds.includes(preferredProvider) ? preferredProvider : (providerIds[0] ?? '')
-    // Stability beats micro-latency: the user's configured model is the one
-    // already trusted with this Session, so review and routing use it first.
-    if (preferredProvider === provider && provider !== '' && typeof selection?.model === 'string' && selection.model !== '') {
-      return { llm, provider, model: selection.model }
-    }
-    if (provider === '') {
-      return typeof selection?.model === 'string' && selection.model !== ''
-        ? { llm, provider: selection.provider, model: selection.model }
-        : null
-    }
+    const provider = providerIds[0] ?? ''
+    if (provider === '') return null
 
     let models = []
     try {
@@ -823,7 +845,7 @@ class ModelJudge {
     const ids = [...new Set((Array.isArray(models) ? models : [])
       .map(item => (typeof item?.id === 'string' ? item.id : ''))
       .filter(Boolean))]
-    const ranked = ids.sort((a, b) => modelScore(b, selection?.model) - modelScore(a, selection?.model))
+    const ranked = ids.sort((a, b) => modelScore(b, '') - modelScore(a, ''))
 
     // Prefer a model with no reasoning phase: a 200-token classifier does not
     // need (or benefit from) a long internal monologue.
@@ -837,12 +859,12 @@ class ModelJudge {
       const efforts = info?.reasoning?.efforts
       if (!Array.isArray(efforts) || efforts.length === 0) return { llm, provider, model: id }
     }
-    const model = ranked[0] ?? (typeof selection?.model === 'string' ? selection.model : '')
+    const model = ranked[0] ?? ''
     return model === '' ? null : { llm, provider, model }
   }
 
-  async call(options) {
-    const route = await this.route()
+  async call(options, route = undefined) {
+    if (route === undefined) route = await this.route(options.sessionId)
     if (route === null) return { ok: false, error: '模型服务不可用' }
     const { system, user, maxTokens = 500, temperature = 0, timeoutMs = 15_000 } = options
     const controller = new AbortController()
@@ -852,6 +874,7 @@ class ModelJudge {
       const request = {
         provider: route.provider,
         model: route.model,
+        ...(route.reasoningEffort === undefined ? {} : { reasoningEffort: route.reasoningEffort }),
         system,
         messages: [{ role: 'user', content: [{ type: 'text', text: String(user ?? '') }] }],
         maxTokens,
@@ -884,7 +907,8 @@ class ModelJudge {
   }
 
   async json(options) {
-    const first = await this.call(options)
+    const route = await this.route(options.sessionId)
+    const first = await this.call(options, route)
     if (!first.ok && first.code !== 'model-output-limit') return first
     const parsed = first.ok ? jsonFromText(first.text) : null
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -898,7 +922,7 @@ class ModelJudge {
       // not retry; ordinary malformed JSON keeps its existing smaller retry.
       maxTokens: first.finishKind === 'max-tokens' ? 2_000 : Math.min(1_200, (options.maxTokens ?? 500) + 250),
       system: `${options.system}\n\n${first.finishKind === 'max-tokens' ? '上一次输出达到长度上限，未取得完整 JSON。请简短作答。' : '上一次输出不是合法 JSON。'}只输出一个 JSON 对象，不要代码围栏，不要任何其他字符。`,
-    })
+    }, route)
     if (!retry.ok) return retry
     const retried = jsonFromText(retry.text)
     if (retried === null || typeof retried !== 'object' || Array.isArray(retried)) {

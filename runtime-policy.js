@@ -184,10 +184,9 @@ export function attachRuntimePolicy(ctx, options = {}) {
     const stat = statSync(workspaceRoot)
     return { sessionId: id, agent, workspaceRoot, cwd, identity: `${stat.dev}:${stat.ino}` }
   }
-  function stateFor(id, agent) {
+  function stateFor(id, agent, policy = policyFor(id), publish = true) {
     if (disposed || !available) throw failure('runtime-policy-unavailable', unavailableReason || '执行拦截接口不可用')
-    const policy = policyFor(id)
-    if (!policy?.enabled) { sessions.delete(id); return null }
+    if (!policy?.enabled) { if (publish) sessions.delete(id); return null }
     if (policy.invalid === true) throw failure('runtime-policy-invalid', '保护策略与当前会话工作区不一致，请重新确认')
     if (!MODES.has(policy.mode)) throw failure('runtime-policy-invalid', '保护模式配置不合法')
     const context = contextFor(id, agent)
@@ -208,11 +207,13 @@ export function attachRuntimePolicy(ctx, options = {}) {
       if (options.fileTaskDefinition && toolService.get('dsh_file_task', context.agent) === options.fileTaskDefinition) definitions.set('dsh_file_task', options.fileTaskDefinition)
       if (!definitions.has('read') || !definitions.has('skill')) throw failure('runtime-policy-unavailable', '宿主缺少已核实的 read/skill 工具接口')
       state = { generation, context, mode: policy.mode, definitions, active: state?.active || new Map() }
-      sessions.set(id, state)
+      if (publish) sessions.set(id, state)
     }
     if (!samePath(state.context.workspaceRoot, context.workspaceRoot) || state.context.identity !== context.identity) throw failure('runtime-workspace-changed', '保护工作区身份已变化，请关闭后重新确认')
-    state.context = context
-    if (options.fileTaskDefinition && toolService.get('dsh_file_task', context.agent) === options.fileTaskDefinition) state.definitions.set('dsh_file_task', options.fileTaskDefinition)
+    if (publish) {
+      state.context = context
+      if (options.fileTaskDefinition && toolService.get('dsh_file_task', context.agent) === options.fileTaskDefinition) state.definitions.set('dsh_file_task', options.fileTaskDefinition)
+    }
     return state
   }
   function validate(exec, state) {
@@ -358,6 +359,12 @@ export function attachRuntimePolicy(ctx, options = {}) {
   }
   return {
     status,
+    // Validate a proposed policy without exposing it to guards or changing
+    // cached session/grant state before the settings transaction commits.
+    validatePolicy(sessionId, policy) {
+      if (!policy?.enabled) throw failure('runtime-protection-required', '候选策略没有开启保护')
+      stateFor(sessionId, undefined, policy, false)
+    },
     requireProtected(sessionId) {
       const current = status(sessionId)
       if (!current.protected) throw failure(current.available ? 'runtime-protection-required' : 'runtime-policy-unavailable', current.reason)
